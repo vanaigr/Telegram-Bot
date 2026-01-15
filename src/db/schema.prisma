@@ -13,20 +13,22 @@ enum messageType {
 }
 
 model messages {
-    sequenceNumber Int @id @default(autoincrement())
+    chatId BigInt
+    messageId BigInt
 
     date DateTime @db.Timestamp(6)
-    chatId BigInt
     type messageType
     raw Json
     needsResponse Boolean
+
+    @@id([chatId, messageId])
 }
 
 model responses {
     sequenceNumber Int @id @default(autoincrement())
-
-    respondToSequenceNumber Int
     raw Json
+    respondsToChatId BigInt
+    respondsToMessageId BigInt
 }
 
 enum downloadStatus {
@@ -37,7 +39,7 @@ enum downloadStatus {
 
 model photos {
     file_unique_id String @db.VarChar(512) @id
-    size Json
+    raw Json
     status downloadStatus
     bytes Bytes
 }

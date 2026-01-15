@@ -74,21 +74,22 @@ export const dbTypes = {
 } as const
 export const tables = {
     "messages": {
-        "sequenceNumber": t_integer,
-        "date": t_timestamp,
         "chatId": t_bigint,
+        "messageId": t_bigint,
+        "date": t_timestamp,
         "type": t_messageType,
         "raw": t_json,
         "needsResponse": t_boolean,
     },
     "responses": {
         "sequenceNumber": t_integer,
-        "respondToSequenceNumber": t_integer,
         "raw": t_json,
+        "respondsToChatId": t_bigint,
+        "respondsToMessageId": t_bigint,
     },
     "photos": {
         "file_unique_id": t_text,
-        "size": t_json,
+        "raw": t_json,
         "status": t_downloadStatus,
         "bytes": t_bytea,
     },

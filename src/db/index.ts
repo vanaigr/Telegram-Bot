@@ -207,7 +207,7 @@ export async function insertMany<
   Scalars extends Partial<Q.ForInput<TableSchema>> = never,
 >(
   db: DbConnOrPool,
-  dst: Q.TableExact<TableSchema, Record<string, Q.AnyDbTypeInfo>>,
+  dst: Q.Table<TableSchema, Record<string, Q.AnyDbTypeInfo>>,
   tableSchema: TableSchema,
   records: Q.ForInput<Omit<TableSchema, keyof Scalars>>[],
   // TypeScript 🗿
