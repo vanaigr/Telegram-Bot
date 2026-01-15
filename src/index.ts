@@ -134,7 +134,8 @@ function respond(ctx: Ctx) {
     const response = await ctx.openRouter.chat.send({
       //model: 'moonshotai/kimi-k2-0905',
       //model: 'moonshotai/kimi-k2-thinking',
-      model: 'x-ai/grok-4.1-fast',
+      //model: 'x-ai/grok-4.1-fast',
+      model: 'google/gemini-2.5-flash-lite',
       //model: 'openai/gpt-oss-120b',
       provider: {
         dataCollection: 'deny',
