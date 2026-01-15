@@ -62,7 +62,8 @@ async function main() {
           )
       })
 
-      if(msg.photo) downloadPhotos(ctx, msg.photo)
+      const photo = getPhoto(msg.photo)
+      if(photo) downloadPhoto(ctx, photo)
 
       if(msg.text && msg.text.startsWith('/stop')) {
         const emojis = ['👍', '🙂', '💀', '☠']
@@ -93,9 +94,12 @@ You are a group chat participant. Write a reply if you think users would appreci
 You are a group chat participant. Write a reply if users ask you something (@balbes52_bot, Балбес, etc.). Reply <empty> (with angle brackets) otherwise. Plan out your reply.
 */
 const systemPrompt = `
-You are a group chat participant. Write a reply if you think users would appreciate it or if they ask you (@balbes52_bot, Балбес, etc.). Reply <empty> (with angle brackets) if you think users are talkning between themselves and would not appreciate your interruption.
+You are a group chat participant, a typical 20-something year old. Write a reply if you think users would appreciate it or if they ask you (@balbes52_bot, Балбес, etc.). Reply <empty> (with angle brackets) if you think users are talkning between themselves and would not appreciate your interruption.
 
 Don't write essays. Nobody wants to read a lot.
+Users don't see empty messages. If there's an error, tell them that.
+
+If users ask to translate or extract text from an image, you need to **transcribe** the text in the image exactly. Do not make up anything.
 
 Commands that you can do (if users ask):
 /stop - Temporarily suspends you
@@ -115,6 +119,8 @@ type Photo = {
   file_unique_id: string
   status: string
   data: Buffer
+
+  info: TelegramBot.PhotoSize
 }
 
 function respond(ctx: Ctx) {
@@ -157,24 +163,36 @@ async function doResponse(ctx: Ctx, whenError: { chatId: number | undefined }) {
       const msg = JSON.parse(it.raw) as TelegramBot.Message
       return {
         msg,
-        photos: (msg.photo ?? []).map((orig): Photo => ({
-          file_unique_id: orig.file_unique_id,
-          status: 'not-available',
-          data: Buffer.from([]),
-        }))
+        photos: ((): Photo[] => {
+          const photo = getPhoto(msg.photo)
+          if(!photo) return []
+
+          return [
+            {
+              file_unique_id: photo.file_unique_id,
+              status: 'not-available',
+              data: Buffer.from([]),
+              info: photo,
+            }
+          ]
+        })()
       }
     })
 
     const last = messages[messages.length - 1]
-    if(last.msg.photo && last.msg.photo.length > 0) {
-      const file = db.prepare('select file_unique_id, status, data from photos where file_unique_id = ?')
-        .get(last.msg.photo[0].file_unique_id) as any
+    if(last.photos.length > 0) {
+      const file = db.prepare('select status, data from photos where file_unique_id = ?')
+        .get(last.photos[0].file_unique_id) as any
       if(file === undefined || file.status === 'downloading') {
         console.log(' not sending, image still downloading')
         return
       }
 
-      last.photos[0] = file
+      last.photos[0] = {
+        ...last.photos[0],
+        status: file.status,
+        data: file.data,
+      }
     }
 
     return {
@@ -197,16 +215,16 @@ async function doResponse(ctx: Ctx, whenError: { chatId: number | undefined }) {
       }
     }
     else {
-      const text = 'At '
+      const text = 'From: ' + (msg.from?.first_name + ' ' + msg.from?.last_name).trim() + '(@' + msg.from?.username + ')\n'
+        + 'At: '
         + T.Instant.fromEpochMilliseconds(msg.date * 1000)
           .toZonedDateTimeISO(T.Now.timeZoneId())
           .toPlainDateTime().toString()
         + '\n'
-        + (msg.text ?? '<no message>')
+        + 'Text: ' + (msg.text ?? '<no message>')
 
       return {
         role: 'user',
-        name: (msg.from?.first_name + ' ' + msg.from?.last_name).trim() + '(@' + msg.from?.username + ')',
         content: [
           { type: 'text', text },
           ...await Promise.all(photos.map(async(photo) => {
@@ -218,7 +236,7 @@ async function doResponse(ctx: Ctx, whenError: { chatId: number | undefined }) {
                   type: 'image_url' as const,
                   imageUrl: {
                     url: dataUrl,
-                    detail: 'auto' as const,
+                    detail: 'high' as const,
                   },
                 }
               }
@@ -238,10 +256,14 @@ async function doResponse(ctx: Ctx, whenError: { chatId: number | undefined }) {
   }))
 
   const response = await ctx.openRouter.chat.send({
+    //model: 'openai/gpt-5-mini', // слишком стерильный
+    //model: 'openai/chatgpt-4o-latest', // тоже наверно
+    //model: 'x-ai/grok-4.1-fast', // not super coherent
+    //model: 'google/gemini-2.5-flash-lite',
+    model: 'google/gemini-3-flash-preview',
+
     //model: 'moonshotai/kimi-k2-0905',
     //model: 'moonshotai/kimi-k2-thinking',
-    //model: 'x-ai/grok-4.1-fast',
-    model: 'google/gemini-2.5-flash-lite',
     //model: 'openai/gpt-oss-120b',
     provider: {
       dataCollection: 'deny',
@@ -302,61 +324,58 @@ async function doResponse(ctx: Ctx, whenError: { chatId: number | undefined }) {
   console.log('message sent to', data.chatId)
 }
 
-async function downloadPhotos(
+async function downloadPhoto(
   ctx: Ctx,
-  photos: TelegramBot.PhotoSize[]
+  photo: TelegramBot.PhotoSize
 ) {
   try {
-    const photo = photos.at(0)
-    if(photo) {
-      console.log('downloading', photo.file_unique_id)
+    console.log('downloading', photo.file_unique_id)
 
-      const download = await runTransaction(db => {
-        const existing = db.prepare('select file_unique_id from photos where file_unique_id = ?').get(photo.file_unique_id)
-        if(existing !== undefined) return false
+    const download = await runTransaction(db => {
+      const existing = db.prepare('select file_unique_id from photos where file_unique_id = ?').get(photo.file_unique_id)
+      if(existing !== undefined) return false
 
-        db.prepare('insert into photos(file_unique_id, size, status, data) values (?, ?, ?, ?)')
-          .run(
-            photo.file_unique_id,
-            JSON.stringify(photo.file_size),
-            'downloading',
-            Buffer.from([]),
-          )
+      db.prepare('insert into photos(file_unique_id, size, status, data) values (?, ?, ?, ?)')
+        .run(
+          photo.file_unique_id,
+          JSON.stringify(photo.file_size),
+          'downloading',
+          Buffer.from([]),
+        )
 
-        return true
-      })
-      if(!download) {
-        console.log(' already exists', photo.file_unique_id)
-        return
-      }
-
-      try {
-        const stream = ctx.bot.getFileStream(photo.file_id)
-        const data = await streamConsumers.buffer(stream);
-        console.log('  downloaded', photo.file_unique_id)
-
-        await runTransaction(db => {
-          db.prepare('update photos set status = ?, data = ? where file_unique_id = ?')
-            .run(
-              'done',
-              data,
-              photo.file_unique_id,
-            )
-        })
-      }
-      catch(error) {
-        await runTransaction(db => {
-          db.prepare('update photos set status = ? where file_unique_id = ?')
-            .run(
-              'error',
-              photo.file_unique_id,
-            )
-        })
-        throw error
-      }
-
-      respond(ctx)
+      return true
+    })
+    if(!download) {
+      console.log(' already exists', photo.file_unique_id)
+      return
     }
+
+    try {
+      const stream = ctx.bot.getFileStream(photo.file_id)
+      const data = await streamConsumers.buffer(stream);
+      console.log('  downloaded', photo.file_unique_id)
+
+      await runTransaction(db => {
+        db.prepare('update photos set status = ?, data = ? where file_unique_id = ?')
+          .run(
+            'done',
+            data,
+            photo.file_unique_id,
+          )
+      })
+    }
+    catch(error) {
+      await runTransaction(db => {
+        db.prepare('update photos set status = ? where file_unique_id = ?')
+          .run(
+            'error',
+            photo.file_unique_id,
+          )
+      })
+      throw error
+    }
+
+    respond(ctx)
   }
   catch(error) {
     console.log('could not download photo', error)
@@ -409,6 +428,10 @@ create table photos(
 
     db.pragma('user_version = ' + v)
   })
+}
+
+function getPhoto(photos: TelegramBot.PhotoSize[]| undefined): TelegramBot.PhotoSize | undefined {
+  return photos?.at(-1)
 }
 
 function connect(): sqlite.Database {
