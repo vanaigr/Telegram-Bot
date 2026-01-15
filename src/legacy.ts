@@ -101,9 +101,6 @@ Users don't see empty messages. If there's an error, tell them that.
 
 If users ask to translate or extract text from an image, you need to **transcribe** the text in the image exactly. Do not make up anything.
 
-Commands that you can do (if users ask):
-/stop - Temporarily suspends you
-
 `.trim()
 
 type Ctx = {

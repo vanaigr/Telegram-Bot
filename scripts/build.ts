@@ -1,0 +1,30 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { rollup } from 'rollup'
+import resolve from '@rollup/plugin-node-resolve';
+import esbuild from 'rollup-plugin-esbuild'
+//import commonjs from '@rollup/plugin-commonjs';
+
+const root = path.join(import.meta.dirname, '..')
+
+const build = await rollup({
+  input: path.join(root, 'src', 'webhook.ts'),
+  plugins: [
+    // @ts-ignore
+    resolve(),
+    esbuild({ include: /\.ts$/ }),
+    //commonjs()
+  ],
+  external: id => /node_modules/.test(id),
+})
+await build.write({
+  file: path.join(root, 'api', 'webhook.js'),
+  format: 'esm',
+  exports: 'named'
+})
+await build.close()
+
+try {
+  fs.mkdirSync(path.join(root, 'dist'))
+  fs.writeFileSync(path.join(root, 'dist', 'index.html'), 'balbes bot. That\'s it (what did you expect?, it\'s a telegram bot)')
+} catch(error) {}

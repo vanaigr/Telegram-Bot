@@ -79,10 +79,10 @@ export function makeLogger(
   })();
 
   const log = (channel: Channel, logger: Log, message: Message) => {
-    const dt = T.Now.zonedDateTimeISO();
+    //const dt = T.Now.zonedDateTimeISO();
 
     const fullMessage: MutableMessage = [];
-    fullMessage.push([[dtToString(dt)], 'context']);
+    //fullMessage.push([[dtToString(dt)], 'context']);
     const fillLoggers = (it: Log) => {
       if (it.parent) fillLoggers(it.parent);
       for (const ctx of it.prefix) fullMessage.push(ctx);
