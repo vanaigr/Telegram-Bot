@@ -2,6 +2,9 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import util from 'node:util'
+import streamConsumers from 'stream/consumers';
+
+import { FileTypeParser } from 'file-type';
 import { Temporal as T } from 'temporal-polyfill'
 import TelegramBot from 'node-telegram-bot-api'
 import dotenv from 'dotenv'
@@ -55,10 +58,11 @@ async function main() {
             msg.chat.id,
             'user',
             JSON.stringify(msg),
-            msg.text ? 1 : 0,
+            1,
           )
       })
 
+      if(msg.photo) downloadPhotos(ctx, msg.photo)
 
       if(msg.text && msg.text.startsWith('/stop')) {
         const emojis = ['👍', '🙂', '💀', '☠']
@@ -107,6 +111,12 @@ type Ctx = {
 /// ???????????
 type OpenRouterMessage = OpenRouter['chat']['send'] extends (a: { messages: Array<infer Message> }) => infer U1 ? Message : never
 
+type Photo = {
+  file_unique_id: string
+  status: string
+  data: Buffer
+}
+
 function respond(ctx: Ctx) {
   const respondPrev = ctx.responding
   const respondNext = (async() => {
@@ -120,7 +130,29 @@ function respond(ctx: Ctx) {
 
       const messages = (db.prepare('select raw from messages where date <= ? and chatId = ? order by date')
         .all(unresponded.date, unresponded.chatId) as any[])
-        .map(it => JSON.parse(it.raw) as TelegramBot.Message)
+        .map(it => {
+          const msg = JSON.parse(it.raw) as TelegramBot.Message
+          return {
+            msg,
+            photos: (msg.photo ?? []).map((orig): Photo => ({
+              file_unique_id: orig.file_unique_id,
+              status: 'not-available',
+              data: Buffer.from([]),
+            }))
+          }
+        })
+
+      const last = messages[messages.length - 1]
+      if(last.msg.photo && last.msg.photo.length > 0) {
+        const file = db.prepare('select file_unique_id, status, data from photos where file_unique_id = ?')
+          .get(last.msg.photo[0].file_unique_id) as any
+        if(file === undefined || file.status === 'downloading') {
+          console.log(' not sending, image still downloading')
+          return
+        }
+
+        last.photos[0] = file
+      }
 
       return {
         respondToSequenceNumber: unresponded.sequenceNumber,
@@ -128,8 +160,59 @@ function respond(ctx: Ctx) {
         messages
       }
     })
-    if(data === undefined) return
+    if(data === undefined) {
+      console.log('nothing to respond to')
+      return
+    }
     console.log('responding to', data.respondToSequenceNumber)
+
+    const messages = await Promise.all(data.messages.map(async({ msg, photos }): Promise<OpenRouterMessage> => {
+      if(msg.from?.username === 'balbes52_bot') {
+        return {
+          role: 'assistant',
+          content: msg.text,
+        }
+      }
+      else {
+        const text = 'At '
+          + T.Instant.fromEpochMilliseconds(msg.date * 1000)
+            .toZonedDateTimeISO(T.Now.timeZoneId())
+            .toPlainDateTime().toString()
+          + '\n'
+          + (msg.text ?? '<no message>')
+
+        return {
+          role: 'user',
+          name: (msg.from?.first_name + ' ' + msg.from?.last_name).trim() + '(@' + msg.from?.username + ')',
+          content: [
+            { type: 'text', text },
+            ...await Promise.all(photos.map(async(photo) => {
+              if(photo.status === 'done') {
+                const type = await new FileTypeParser().fromBuffer(photo.data)
+                if(type !== undefined) {
+                  const dataUrl = `data:${type.mime};base64,${photo.data.toString("base64")}`;
+                  return {
+                    type: 'image_url' as const,
+                    imageUrl: {
+                      url: dataUrl,
+                      detail: 'auto' as const,
+                    },
+                  }
+                }
+                else {
+                  console.log('  could not detect file type for', photo.file_unique_id)
+                }
+              }
+
+              return {
+                type: 'text' as const,
+                text: '<image not available>',
+              }
+            })),
+          ]
+        }
+      }
+    }))
 
     const response = await ctx.openRouter.chat.send({
       //model: 'moonshotai/kimi-k2-0905',
@@ -152,26 +235,7 @@ function respond(ctx: Ctx) {
       stream: false,
       messages: [
         { role: 'system', content: systemPrompt },
-        ...data.messages.map((it): OpenRouterMessage => {
-          if(it.from?.username === 'balbes52_bot') {
-            return {
-              role: 'assistant',
-              content: it.text,
-            }
-          }
-          else {
-            return {
-              role: 'user',
-              name: (it.from?.first_name + ' ' + it.from?.last_name).trim() + '(@' + it.from?.username + ')',
-              content: 'At '
-                + T.Instant.fromEpochMilliseconds(it.date * 1000)
-                  .toZonedDateTimeISO(T.Now.timeZoneId())
-                  .toPlainDateTime().toString()
-                + '\n'
-                + (it.text ?? '<no message>'),
-            }
-          }
-        }),
+        ...messages,
       ],
     })
     console.log('response to', data.respondToSequenceNumber, 'generated')
@@ -220,6 +284,67 @@ function respond(ctx: Ctx) {
   return respondNext
 }
 
+async function downloadPhotos(
+  ctx: Ctx,
+  photos: TelegramBot.PhotoSize[]
+) {
+  try {
+    const photo = photos.at(0)
+    if(photo) {
+      console.log('downloading', photo.file_unique_id)
+
+      const download = await runTransaction(db => {
+        const existing = db.prepare('select file_unique_id from photos where file_unique_id = ?').get(photo.file_unique_id)
+        if(existing !== undefined) return false
+
+        db.prepare('insert into photos(file_unique_id, size, status, data) values (?, ?, ?, ?)')
+          .run(
+            photo.file_unique_id,
+            JSON.stringify(photo.file_size),
+            'downloading',
+            Buffer.from([]),
+          )
+
+        return true
+      })
+      if(!download) {
+        console.log(' already exists', photo.file_unique_id)
+        return
+      }
+
+      try {
+        const stream = ctx.bot.getFileStream(photo.file_id)
+        const data = await streamConsumers.buffer(stream);
+        console.log('  downloaded', photo.file_unique_id)
+
+        await runTransaction(db => {
+          db.prepare('update photos set status = ?, data = ? where file_unique_id = ?')
+            .run(
+              'done',
+              data,
+              photo.file_unique_id,
+            )
+        })
+      }
+      catch(error) {
+        await runTransaction(db => {
+          db.prepare('update photos set status = ? where file_unique_id = ?')
+            .run(
+              'error',
+              photo.file_unique_id,
+            )
+        })
+        throw error
+      }
+
+      respond(ctx)
+    }
+  }
+  catch(error) {
+    console.log('could not download photo', error)
+  }
+}
+
 async function migrateDb() {
   await runTransaction(db => {
     let v: number = (db.pragma('user_version') as any)[0].user_version
@@ -246,9 +371,25 @@ create table responses(
 )
       `)
 
-      db.pragma('user_version = 1')
       v = 1
     }
+
+    if(v === 1) {
+      console.log(' migration 1')
+
+      db.exec(`
+create table photos(
+  file_unique_id text primary key,
+  size text,
+  status text,
+  data blob
+)
+      `)
+
+      v = 2
+    }
+
+    db.pragma('user_version = ' + v)
   })
 }
 

@@ -8,6 +8,7 @@
         "@types/better-sqlite3": "^7.6.13",
         "better-sqlite3": "^12.6.0",
         "dotenv": "^17.2.3",
+        "file-type": "^21.3.0",
         "node-telegram-bot-api": "^0.67.0",
         "nodemon": "^3.1.11",
         "temporal-polyfill": "^0.3.0"
