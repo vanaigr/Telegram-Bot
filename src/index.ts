@@ -122,166 +122,184 @@ function respond(ctx: Ctx) {
   const respondNext = (async() => {
     try { await respondPrev } catch(err) {}
 
-    const data = await runTransaction(db => {
-      const now = T.Now.instant().epochMilliseconds / 1000
-
-      const unresponded = (db.prepare('select sequenceNumber, date, chatId from messages where needsResponse = 1 and date > ? order by date limit 1').get(now - 30) as any)
-      if(unresponded === undefined) return
-
-      const messages = (db.prepare('select raw from messages where date <= ? and chatId = ? order by date')
-        .all(unresponded.date, unresponded.chatId) as any[])
-        .map(it => {
-          const msg = JSON.parse(it.raw) as TelegramBot.Message
-          return {
-            msg,
-            photos: (msg.photo ?? []).map((orig): Photo => ({
-              file_unique_id: orig.file_unique_id,
-              status: 'not-available',
-              data: Buffer.from([]),
-            }))
-          }
-        })
-
-      const last = messages[messages.length - 1]
-      if(last.msg.photo && last.msg.photo.length > 0) {
-        const file = db.prepare('select file_unique_id, status, data from photos where file_unique_id = ?')
-          .get(last.msg.photo[0].file_unique_id) as any
-        if(file === undefined || file.status === 'downloading') {
-          console.log(' not sending, image still downloading')
-          return
-        }
-
-        last.photos[0] = file
+    const whenError = { chatId: undefined as number | undefined }
+    try {
+      await doResponse(ctx, whenError)
+    }
+    catch(error) {
+      console.error(error)
+      if(whenError.chatId !== undefined) {
+        const emojis = ['🙂', '💀', '☠', '🌀']
+        await ctx.bot.sendMessage(
+          whenError.chatId,
+          'Бот шандарахнулся ' + emojis[Math.floor(Math.random() * emojis.length)]
+        );
       }
+    }
+  })()
+  ctx.responding = respondNext
 
+  return respondNext
+}
+
+async function doResponse(ctx: Ctx, whenError: { chatId: number | undefined }) {
+  const data = await runTransaction(db => {
+    const now = T.Now.instant().epochMilliseconds / 1000
+
+    const unresponded = (db.prepare('select sequenceNumber, date, chatId from messages where needsResponse = 1 and date > ? order by date limit 1').get(now - 30) as any)
+    if(unresponded === undefined) return
+
+    whenError.chatId = unresponded.chatId
+
+    const messages = (db.prepare('select raw from messages where date <= ? and chatId = ? order by date')
+      .all(unresponded.date, unresponded.chatId) as any[])
+    .map(it => {
+      const msg = JSON.parse(it.raw) as TelegramBot.Message
       return {
-        respondToSequenceNumber: unresponded.sequenceNumber,
-        chatId: unresponded.chatId,
-        messages
+        msg,
+        photos: (msg.photo ?? []).map((orig): Photo => ({
+          file_unique_id: orig.file_unique_id,
+          status: 'not-available',
+          data: Buffer.from([]),
+        }))
       }
     })
-    if(data === undefined) {
-      console.log('nothing to respond to')
-      return
+
+    const last = messages[messages.length - 1]
+    if(last.msg.photo && last.msg.photo.length > 0) {
+      const file = db.prepare('select file_unique_id, status, data from photos where file_unique_id = ?')
+        .get(last.msg.photo[0].file_unique_id) as any
+      if(file === undefined || file.status === 'downloading') {
+        console.log(' not sending, image still downloading')
+        return
+      }
+
+      last.photos[0] = file
     }
-    console.log('responding to', data.respondToSequenceNumber)
 
-    const messages = await Promise.all(data.messages.map(async({ msg, photos }): Promise<OpenRouterMessage> => {
-      if(msg.from?.username === 'balbes52_bot') {
-        return {
-          role: 'assistant',
-          content: msg.text,
-        }
+    return {
+      respondToSequenceNumber: unresponded.sequenceNumber,
+      chatId: unresponded.chatId,
+      messages
+    }
+  })
+  if(data === undefined) {
+    console.log('nothing to respond to')
+    return
+  }
+  console.log('responding to', data.respondToSequenceNumber)
+
+  const messages = await Promise.all(data.messages.map(async({ msg, photos }): Promise<OpenRouterMessage> => {
+    if(msg.from?.username === 'balbes52_bot') {
+      return {
+        role: 'assistant',
+        content: msg.text,
       }
-      else {
-        const text = 'At '
-          + T.Instant.fromEpochMilliseconds(msg.date * 1000)
-            .toZonedDateTimeISO(T.Now.timeZoneId())
-            .toPlainDateTime().toString()
-          + '\n'
-          + (msg.text ?? '<no message>')
+    }
+    else {
+      const text = 'At '
+        + T.Instant.fromEpochMilliseconds(msg.date * 1000)
+          .toZonedDateTimeISO(T.Now.timeZoneId())
+          .toPlainDateTime().toString()
+        + '\n'
+        + (msg.text ?? '<no message>')
 
-        return {
-          role: 'user',
-          name: (msg.from?.first_name + ' ' + msg.from?.last_name).trim() + '(@' + msg.from?.username + ')',
-          content: [
-            { type: 'text', text },
-            ...await Promise.all(photos.map(async(photo) => {
-              if(photo.status === 'done') {
-                const type = await new FileTypeParser().fromBuffer(photo.data)
-                if(type !== undefined) {
-                  const dataUrl = `data:${type.mime};base64,${photo.data.toString("base64")}`;
-                  return {
-                    type: 'image_url' as const,
-                    imageUrl: {
-                      url: dataUrl,
-                      detail: 'auto' as const,
-                    },
-                  }
-                }
-                else {
-                  console.log('  could not detect file type for', photo.file_unique_id)
+      return {
+        role: 'user',
+        name: (msg.from?.first_name + ' ' + msg.from?.last_name).trim() + '(@' + msg.from?.username + ')',
+        content: [
+          { type: 'text', text },
+          ...await Promise.all(photos.map(async(photo) => {
+            if(photo.status === 'done') {
+              const type = await new FileTypeParser().fromBuffer(photo.data)
+              if(type !== undefined) {
+                const dataUrl = `data:${type.mime};base64,${photo.data.toString("base64")}`;
+                return {
+                  type: 'image_url' as const,
+                  imageUrl: {
+                    url: dataUrl,
+                    detail: 'auto' as const,
+                  },
                 }
               }
-
-              return {
-                type: 'text' as const,
-                text: '<image not available>',
+              else {
+                console.log('  could not detect file type for', photo.file_unique_id)
               }
-            })),
-          ]
-        }
-      }
-    }))
+            }
 
-    const response = await ctx.openRouter.chat.send({
-      //model: 'moonshotai/kimi-k2-0905',
-      //model: 'moonshotai/kimi-k2-thinking',
-      //model: 'x-ai/grok-4.1-fast',
-      model: 'google/gemini-2.5-flash-lite',
-      //model: 'openai/gpt-oss-120b',
-      provider: {
-        dataCollection: 'deny',
-        /*
+            return {
+              type: 'text' as const,
+              text: '<image not available>',
+            }
+          })),
+        ]
+      }
+    }
+  }))
+
+  const response = await ctx.openRouter.chat.send({
+    //model: 'moonshotai/kimi-k2-0905',
+    //model: 'moonshotai/kimi-k2-thinking',
+    //model: 'x-ai/grok-4.1-fast',
+    model: 'google/gemini-2.5-flash-lite',
+    //model: 'openai/gpt-oss-120b',
+    provider: {
+      dataCollection: 'deny',
+      /*
         order: [
           'atlas-cloud/fp8',
           //'google-vertex',
         ],
         */
-      },
-      reasoning: {
-        effort: 'medium',
-      },
-      stream: false,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        ...messages,
-      ],
-    })
-    console.log('response to', data.respondToSequenceNumber, 'generated')
+    },
+    reasoning: {
+      effort: 'medium',
+    },
+    stream: false,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      ...messages,
+    ],
+  })
+  console.log('response to', data.respondToSequenceNumber, 'generated')
 
-    await runTransaction(db => {
-      db.prepare('update messages set needsResponse = ? where sequenceNumber = ?')
-        .run(0, data.respondToSequenceNumber)
+  await runTransaction(db => {
+    db.prepare('update messages set needsResponse = ? where sequenceNumber = ?')
+      .run(0, data.respondToSequenceNumber)
 
-      db.prepare('insert into responses(respondToSequenceNumber, raw) values (?, ?)')
-        .run(data.respondToSequenceNumber, JSON.stringify(response))
-    })
+    db.prepare('insert into responses(respondToSequenceNumber, raw) values (?, ?)')
+      .run(data.respondToSequenceNumber, JSON.stringify(response))
+  })
 
-    const output = response.choices[0].message.content!.toString().trim()
-    if(output === '<empty>' || output === '<>' || output === '') {
-      return
-    }
+  const output = response.choices[0].message.content!.toString().trim()
+  if(output === '<empty>' || output === '<>' || output === '') {
+    return
+  }
 
-    const responseDate = T.Now.instant().epochMilliseconds / 1000
-    await runTransaction(db => {
-      db.prepare('insert into messages(date, chatId, type, raw, needsResponse) values (?, ?, ?, ?, ?)')
-        .run(
-          responseDate,
-          data.chatId,
-          'assistant',
-          JSON.stringify({
-            from: {
-              username: 'balbes52_bot',
-            },
-            date: responseDate,
-            text: output,
-          }),
-          0,
-        )
-    })
+  const responseDate = T.Now.instant().epochMilliseconds / 1000
+  await runTransaction(db => {
+    db.prepare('insert into messages(date, chatId, type, raw, needsResponse) values (?, ?, ?, ?, ?)')
+      .run(
+        responseDate,
+        data.chatId,
+        'assistant',
+        JSON.stringify({
+          from: {
+            username: 'balbes52_bot',
+          },
+          date: responseDate,
+          text: output,
+        }),
+        0,
+      )
+  })
 
-    console.log('sending message to', data.chatId)
-    await ctx.bot.sendMessage(
-      data.chatId,
-      response.choices[0].message.content as string
-    );
-    console.log('message sent to', data.chatId)
-
-  })().catch(err => console.error(err))
-  ctx.responding = respondNext
-
-  return respondNext
+  console.log('sending message to', data.chatId)
+  await ctx.bot.sendMessage(
+    data.chatId,
+    response.choices[0].message.content as string
+  );
+  console.log('message sent to', data.chatId)
 }
 
 async function downloadPhotos(
