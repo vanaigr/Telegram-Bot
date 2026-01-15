@@ -1,0 +1,43 @@
+datasource db {
+  provider = "postgres"
+}
+
+generator tables {
+  provider = "node ./src/db/tableGenerator.ts"
+  output = "./tables.ts"
+}
+
+enum messageType {
+    user
+    assistant
+}
+
+model messages {
+    sequenceNumber Int @id @default(autoincrement())
+
+    date DateTime @db.Timestamp(6)
+    chatId BigInt
+    type messageType
+    raw Json
+    needsResponse Boolean
+}
+
+model responses {
+    sequenceNumber Int @id @default(autoincrement())
+
+    respondToSequenceNumber Int
+    raw Json
+}
+
+enum downloadStatus {
+    downloading
+    error
+    done
+}
+
+model photos {
+    file_unique_id String @db.VarChar(512) @id
+    size Json
+    status downloadStatus
+    bytes Bytes
+}
