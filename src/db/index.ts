@@ -86,7 +86,7 @@ export function eq<T>(
   return Q.scalar<Q.DbTypeInfo<boolean, boolean | (null extends T ? null : never)>>(a, '=', b);
 }
 
-export function setJson<T>(a: Q.Column<unknown, Q.DbTypeInfo<T, unknown>>, value: T) {
+export function setJson<T>(a: Q.Column<unknown, Q.DbTypeInfo<string, T>>, value: T) {
   return [a.nameOnly, '=', Q.param(JSON.stringify(value)), '::json'];
 }
 

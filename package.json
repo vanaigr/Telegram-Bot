@@ -6,6 +6,7 @@
     "dependencies": {
         "@openrouter/sdk": "^0.3.14",
         "@types/better-sqlite3": "^7.6.13",
+        "@vercel/node": "^5.5.22",
         "better-sqlite3": "^12.6.0",
         "dotenv": "^17.2.3",
         "file-type": "^21.3.0",
