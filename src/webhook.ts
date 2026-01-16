@@ -17,7 +17,7 @@ export async function POST(req: Request) {
   const log = L.makeLogger(undefined, undefined)
 
   log.I('Received webhook')
-  log.I([req.headers])
+  //log.I([req.headers])
   const token = req.headers.get('x-telegram-bot-api-secret-token')
   if(token === '' || token !== process.env.TELEGRAM_WEBHOOK_SECRET) {
     log.W('Unexpected webhook token ', [token])
@@ -25,7 +25,7 @@ export async function POST(req: Request) {
   }
 
   const body = await req.json()
-  log.I('Body: ', [body])
+  //log.I('Body: ', [body])
   const message = body.message as Types.Message
 
   const pool = DbClient.create(log)
