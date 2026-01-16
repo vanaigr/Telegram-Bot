@@ -19,13 +19,13 @@ const build = await rollup({
 })
 await build.write({
   sourcemap: 'inline',
-  file: path.join(root, 'api', 'webhook.js'),
+  file: path.join(root, 'why-is-vercel-so-bad-why-can-i-not-do-custom-build-of-server-functions-why-does-vercel-node-package-not-rewrite-ts-extension.js'),
   format: 'esm',
   exports: 'named'
 })
 await build.close()
 
 try {
-  fs.mkdirSync(path.join(root, 'dist'))
-  fs.writeFileSync(path.join(root, 'dist', 'index.html'), 'balbes bot. That\'s it (what did you expect?, it\'s a telegram bot)')
+  fs.mkdirSync(path.join(root, 'public'))
+  fs.writeFileSync(path.join(root, 'public', 'index.html'), 'balbes bot. That\'s it (what did you expect?, it\'s a telegram bot)')
 } catch(error) {}
