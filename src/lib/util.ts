@@ -1,4 +1,5 @@
 import * as L from './log.ts'
+import * as T from './temporal.ts'
 
 export async function timedAsync<const R, const A extends unknown[]>(
   fn: (...args: A) => R,
@@ -39,4 +40,28 @@ export function result<const S, D>(status: S, data: D): Result<S, D> {
 }
 export function status<const S, D>(status: S): Result<S, undefined> {
   return { status, data: undefined };
+}
+
+export function delay(until: T.Instant) {
+  return new Promise((s) => {
+    const check = () => {
+      const diff = until.since(T.Now.instant());
+      if (diff.sign <= 0) {
+        s(undefined);
+        return;
+      }
+      setTimeout(check, diff.total('milliseconds'));
+    };
+    check();
+  });
+}
+
+// NOTE: use this instead of `Promise.all` since in the case of an
+// unexpected error, you rarely want other tasks to still be executing.
+export async function all<T extends readonly unknown[] | []>(
+  values: T,
+): Promise<{ -readonly [P in keyof T]: Awaited<T[P]> }> {
+  await Promise.allSettled(values);
+  // eslint-disable-next-line local/no-promise-all
+  return await Promise.all(values);
 }

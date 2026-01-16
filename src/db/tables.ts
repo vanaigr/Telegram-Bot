@@ -93,4 +93,7 @@ export const tables = {
         "status": t_downloadStatus,
         "bytes": t_bytea,
     },
+    "chatLocks": {
+        "id": t_bigint,
+    },
 } as const

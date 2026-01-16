@@ -12,12 +12,13 @@ const build = await rollup({
   plugins: [
     // @ts-ignore
     resolve(),
-    esbuild({ include: /\.ts$/ }),
+    esbuild({ include: /\.ts$/, sourceMap: true }),
     //commonjs()
   ],
   external: id => /node_modules/.test(id),
 })
 await build.write({
+  sourcemap: 'inline',
   file: path.join(root, 'api', 'webhook.js'),
   format: 'esm',
   exports: 'named'

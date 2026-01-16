@@ -10,6 +10,7 @@ export type Message = {
     username: string
   }
   text?: string
+  caption?: string
   photo?: PhotoSize[]
   date: number
 }

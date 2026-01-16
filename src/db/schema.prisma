@@ -43,3 +43,7 @@ model photos {
     status downloadStatus
     bytes Bytes
 }
+
+model chatLocks {
+    id BigInt @id
+}
