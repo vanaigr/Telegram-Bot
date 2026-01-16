@@ -90,7 +90,7 @@ export function makeLogger(
     fillLoggers(logger);
     for (const fragment of message) fullMessage.push(fragment);
 
-    console.log(messageToString(fullMessage, { colors: true, details: false }));
+    console.log(messageToString(fullMessage, { colors: false, details: false }));
 
     const textMessage = messageToString(fullMessage, { colors: false, details: true });
 

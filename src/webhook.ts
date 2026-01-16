@@ -13,13 +13,15 @@ export async function POST(req: Request) {
   const log = L.makeLogger(undefined, undefined)
 
   log.I('Received webhook')
+  log.I([req.headers])
   const token = req.headers.get('x-telegram-bot-api-secret-token')
-  if( token === '' || token !== process.env.TELEGRAM_WEBHOOK_SECRET) {
-    log.W('Unexpected webhook token ', [token], ' expected ', [process.env.TELEGRAM_WEBHOOK_SECRET])
+  if(token === '' || token !== process.env.TELEGRAM_WEBHOOK_SECRET) {
+    log.W('Unexpected webhook token ', [token])
     return new Response('', { status: 401 })
   }
 
   const body = await req.json()
+  log.I('Body: ', [body])
   const message = body.message as Types.Message
 
   const pool = DbClient.create(log)
@@ -96,15 +98,27 @@ async function downloadPhoto(pool: Db.DbPool, log: L.Log, photo: Types.PhotoSize
       bytes: Buffer.from([]),
     }], {})
 
-    log.I('Getting file url')
     try {
-      const fileInfoUrl = new URL(`https://api.telegram.org/file/bot${encodeURIComponent(process.env.TELEGRAM_BOT_TOKEN!)}/getFile`)
-      fileInfoUrl.searchParams.set('file_id', photo.file_id)
-      const fileInfoResult = await U.request<Types.File>({ url: fileInfoUrl, log, method: 'GET' })
-      if(fileInfoResult.status !== 'ok') throw new Error()
-      const fileInfo = fileInfoResult.data
+      log.I('Getting file url')
 
-      const fileUrl = `https://api.telegram.org/file/bot${encodeURIComponent(process.env.TELEGRAM_BOT_TOKEN!)}/` + fileInfo.file_path
+      const fileInfoUrl = new URL(
+        `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN!}/getFile`
+      )
+      fileInfoUrl.searchParams.set('file_id', photo.file_id)
+      const fileInfoResult = await U.request({ url: fileInfoUrl, log })
+      if(fileInfoResult.status !== 'ok') throw new Error()
+      if(!(fileInfoResult.data as any).ok) {
+        log.E([fileInfoResult.data])
+        throw new Error()
+      }
+      const fileInfo = (fileInfoResult.data as any).result as Types.File
+
+      log.I('Getting File')
+
+      const fileUrl = new URL(
+        `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN!}/`
+          + encodeURIComponent(fileInfo.file_path)
+      )
 
       const response = await fetch(fileUrl)
       if (!response.ok) {
