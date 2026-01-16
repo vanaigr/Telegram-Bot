@@ -44,7 +44,8 @@ export async function POST(req: Request) {
     const emojis = ['🙂', '😳', '👉👈', '😡']
     const text = 'А вы кто ' + emojis[Math.floor(Math.random() * emojis.length)] + '?'
     await sendMessage(message.chat.id, text, log)
-    return
+
+    return new Response(JSON.stringify({}))
   }
 
   const needsResponse = await Db.timedTran(pool, async(db) => {
