@@ -12,8 +12,6 @@ import * as U from './lib/util.ts'
 import type * as Types from './types.ts'
 
 export async function POST(req: Request) {
-  const begin = T.Now.instant()
-
   const log = L.makeLogger(undefined, undefined)
 
   log.I('Received webhook')
@@ -101,7 +99,7 @@ export async function POST(req: Request) {
     const completion = { sent: false }
     try {
       await Db.tran(pool, async(db) => {
-        await reply(db, l, begin, photoTask, message, completion)
+        await reply(db, l, photoTask, message, completion)
       })
     }
     catch(error) {
@@ -210,12 +208,11 @@ async function downloadPhoto(pool: Db.DbPool, log: L.Log, photo: Types.PhotoSize
 async function reply(
   conn: Db.DbTransaction, // not actually a transaction
   log: L.Log,
-  begin: T.Instant,
   photoTask: Promise<unknown>,
   message: Types.Message,
   completion: { sent: boolean },
 ) {
-  const maxWait = begin.add({ seconds: 15 })
+  const maxWait = T.Instant.fromEpochMilliseconds(message.date * 1000).add({ seconds: 15 })
   try {
     const waitFor = Math.floor(maxWait.since(T.Now.instant()).total('milliseconds'))
     if(waitFor <= 10) {
