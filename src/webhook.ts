@@ -14,7 +14,7 @@ export async function POST(req: Request) {
 
   log.I('Received webhook')
   const token = req.headers.get('x-telegram-bot-api-secret-token')
-  if(token === '' || token !== process.env.TELEGRAM_WEBHOOK_SECRET) {
+  if( token === '' || token !== process.env.TELEGRAM_WEBHOOK_SECRET) {
     log.W('Unexpected webhook token ', [token], ' expected ', [process.env.TELEGRAM_WEBHOOK_SECRET])
     return new Response('', { status: 401 })
   }
@@ -28,7 +28,7 @@ export async function POST(req: Request) {
   }
   attachDatabasePool(pool)
 
-  Db.timedTran(pool, async(db) => {
+  await Db.timedTran(pool, async(db) => {
     const dst = Db.t.messages
     const schema = Db.d.messages
     const src = Db.makeTable<typeof schema>('src')
@@ -45,11 +45,12 @@ export async function POST(req: Request) {
 
     await Db.queryRaw(db,
       'insert into', dst, Db.args(cols.map(it => dst[it].nameOnly)),
-      'select', Db.list(cols.map(it => src[it].nameOnly)),
+      'select', Db.list(cols.map(it => src[it])),
       'from', Db.arraysTable([record], schema), 'as', src,
-      'on conflict do nothing'
+      'on conflict do nothing',
     )
   })
+  log.I('Added message')
 
   const photoTask = (async() => {
     const photo = message.photo?.at(-1)

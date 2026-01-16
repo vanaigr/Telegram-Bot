@@ -29,12 +29,12 @@ const t_jsonArray = makeDbType<Array<string>, Array<object>>("json[]")
 const t_bytea = makeDbType<Buffer, Buffer>("bytea")
 const t_byteaNullable = makeDbType<Buffer | null, Buffer | null>("bytea")
 const t_byteaArray = makeDbType<Array<Buffer>, Array<Buffer>>("bytea[]")
-const t_messageType = makeDbType<"user" | "assistant", "user" | "assistant">("messageType")
-const t_messageTypeNullable = makeDbType<"user" | "assistant" | null, "user" | "assistant" | null>("messageType")
-const t_messageTypeArray = makeDbType<Array<"user" | "assistant">, Array<"user" | "assistant">>("messageType[]")
-const t_downloadStatus = makeDbType<"downloading" | "error" | "done", "downloading" | "error" | "done">("downloadStatus")
-const t_downloadStatusNullable = makeDbType<"downloading" | "error" | "done" | null, "downloading" | "error" | "done" | null>("downloadStatus")
-const t_downloadStatusArray = makeDbType<Array<"downloading" | "error" | "done">, Array<"downloading" | "error" | "done">>("downloadStatus[]")
+const t_messageType = makeDbType<"user" | "assistant", "user" | "assistant">("\"messageType\"")
+const t_messageTypeNullable = makeDbType<"user" | "assistant" | null, "user" | "assistant" | null>("\"messageType\"")
+const t_messageTypeArray = makeDbType<Array<"user" | "assistant">, Array<"user" | "assistant">>("\"messageType\"[]")
+const t_downloadStatus = makeDbType<"downloading" | "error" | "done", "downloading" | "error" | "done">("\"downloadStatus\"")
+const t_downloadStatusNullable = makeDbType<"downloading" | "error" | "done" | null, "downloading" | "error" | "done" | null>("\"downloadStatus\"")
+const t_downloadStatusArray = makeDbType<Array<"downloading" | "error" | "done">, Array<"downloading" | "error" | "done">>("\"downloadStatus\"[]")
 export type DbType<Input, Output> = { dbText: string, type?: (i: Input) => Output }
 export function makeDbType<Input, Output>(dbText: string): DbType<Input, Output> { return { dbText } }
 export const dbTypes = {

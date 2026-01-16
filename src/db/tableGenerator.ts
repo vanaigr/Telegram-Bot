@@ -4,7 +4,7 @@ import path from 'node:path';
 import G from '@prisma/generator-helper';
 import P from '@prisma/internals';
 
-type DbTypeInfo = { dbText: string; inputType: string; outputType: string };
+type DbTypeInfo = { dbText: string; inputType: string; outputType: string, escape?: boolean };
 const nonNullBuiltinTypes: DbTypeInfo[] = [
   {
     dbText: 'integer',
@@ -88,7 +88,12 @@ G.generatorHandler({
       const name = it.dbName ?? it.name;
       const type = [...it.values.map((it) => JSON.stringify(it.dbName ?? it.name))].join(' | ');
       prismaTypeToDbTypeName[name] = name;
-      dbTypes.push({ dbText: name, inputType: type, outputType: type });
+      dbTypes.push({
+        dbText: name,
+        inputType: type,
+        outputType: type,
+        escape: true
+      });
     }
 
     // NOTE: variables are needed for optimizing the bundle size.
@@ -109,10 +114,12 @@ G.generatorHandler({
       const propertyNameNullable = propertyName + 'Nullable';
       const propertyNameArray = propertyName + 'Array';
 
+      const escapedDbText = type.escape ? JSON.stringify(type.dbText) : type.dbText
+
       // NOTE: postres doesn't support nonnull array elements, so dbText has to be for nullable type
-      const dbTypeCode = `makeDbType<${type.inputType}, ${type.outputType}>(${JSON.stringify(type.dbText)})`;
-      const dbTypeNullableCode = `makeDbType<${type.inputType} | null, ${type.outputType} | null>(${JSON.stringify(type.dbText)})`;
-      const dbTypeArrayCode = `makeDbType<Array<${type.inputType}>, Array<${type.outputType}>>(${JSON.stringify(type.dbText + '[]')})`;
+      const dbTypeCode = `makeDbType<${type.inputType}, ${type.outputType}>(${JSON.stringify(escapedDbText)})`;
+      const dbTypeNullableCode = `makeDbType<${type.inputType} | null, ${type.outputType} | null>(${JSON.stringify(escapedDbText)})`;
+      const dbTypeArrayCode = `makeDbType<Array<${type.inputType}>, Array<${type.outputType}>>(${JSON.stringify(escapedDbText + '[]')})`;
 
       const variableName = 't_' + propertyName;
       const variableNameNullable = 't_' + propertyNameNullable;
