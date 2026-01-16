@@ -1,9 +1,9 @@
 {
     "type": "module",
     "scripts": {
-        "dev": "nodemon --ext ts --exec 'node src/index.ts'",
         "build": "node scripts/build.ts"
     },
+    "packageManager": "pnpm@10.26.1",
     "dependencies": {
         "@openrouter/sdk": "^0.3.14",
         "@vercel/functions": "^3.3.6",
