@@ -283,23 +283,36 @@ async function reply(
     }
   })
 
-  const last = messages[messages.length - 1]
-  if(last.photos.length > 0) {
-    const t = Db.t.photos
-    const photoRow = await Db.query(conn,
-      'select', [t.status, t.bytes, t.file_unique_id, t.raw],
-      'from', t,
-      'where', Db.eq(t.file_unique_id, Db.param(last.photos[0].file_unique_id)),
-    ).then(it => it.at(0))
-    if(photoRow === undefined || photoRow.status === 'downloading') {
-      log.unreachable([photoRow])
-      return
+  {
+    // Insertion order is from latest to earliest.
+    const fileUniqueIds = new Set<string>()
+    for(let off = 0; off < Math.min(20, messages.length); off++) {
+      const { photos } = messages[messages.length - 1 - off]
+      for(let j = photos.length - 1; j > -1; j--) {
+        fileUniqueIds.add(photos[j].file_unique_id)
+      }
     }
 
-    last.photos[0] = {
-      ...last.photos[0],
-      status: photoRow.status,
-      data: photoRow.bytes,
+    const t = Db.t.photos
+    const arrayP = Db.param([...fileUniqueIds])
+    const photoRows = await Db.query(conn,
+      'select', [t.status, t.bytes, t.file_unique_id, t.raw],
+      'from', t,
+      'where', t.file_unique_id, '=', Db.func('any', arrayP),
+      'and', Db.eq(t.status, Db.param('done' as const)),
+      'order by', Db.func('array_position', arrayP, t.file_unique_id),
+      'limit 5',
+    )
+    const photoRowsById = new Map(photoRows.map(it => [it.file_unique_id, it]))
+
+    for(const message of messages) {
+      for(const photo of message.photos) {
+        const photoRow = photoRowsById.get(photo.file_unique_id)
+        if(photoRow !== undefined) {
+          photo.status = photoRow.status
+          photo.data = photoRow.bytes
+        }
+      }
     }
   }
 

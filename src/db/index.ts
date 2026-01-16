@@ -36,6 +36,10 @@ export function query<Cs extends readonly Q.ScalarExprDefinition<string, Q.AnyDb
   return queryRaw<(typeof columsSql)['rows']>(prisma, initialFragment, columsSql, ...fragments);
 }
 
+export function func(name: Q.SqlPart, ...argValues: Q.SqlPart[]) {
+  return [name, args(argValues)]
+}
+
 export function timedTran<O>(pool: Pool, func: (db: DbTransaction) => O) {
   return U.timedAsync(() => tran(pool, func));
 }
