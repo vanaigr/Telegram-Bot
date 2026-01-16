@@ -5,13 +5,22 @@ import * as Q from './sql.ts';
 import * as U from '../lib/util.ts';
 export * from './sql.ts';
 import * as Schema from './tables.ts';
+import * as Types from '../types.ts'
+
+const modifiedSchema = {
+  ...Schema.tables,
+  messages: {
+    ...Schema.tables.messages,
+    raw: Schema.makeDbType<string, Types.Message>('json'),
+  }
+}
 
 export const dbTypes = Schema.dbTypes;
 
 export const t = Object.fromEntries(
-  Object.entries(Schema.tables).map((it) => [it[0], Q.makeTable<any, any>(it[0])]),
-) as { [K in keyof typeof Schema.tables]: Q.TableExact<(typeof Schema.tables)[K], Record<never, never>> };
-export const d = Schema.tables;
+  Object.entries(modifiedSchema).map((it) => [it[0], Q.makeTable<any, any>(it[0])]),
+) as { [K in keyof typeof modifiedSchema]: Q.TableExact<(typeof modifiedSchema)[K], Record<never, never>> };
+export const d = modifiedSchema;
 
 
 export type DbTransaction = PoolClient;

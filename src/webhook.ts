@@ -24,7 +24,7 @@ export async function POST(req: Request) {
 
   const body = await req.json()
   //log.I('Body: ', [body])
-  const message = body.message as Types.Message
+  const message = body.message
   if(message === undefined) {
     log.I('What did it send to me? ', [body])
     return new Response('')
@@ -308,7 +308,7 @@ async function reply(
   // Postpone responding for 10 seconds if some attachments are loading.
   // If newer messages arrive, we may not send their images, but we don't
   // want the bot to get stuck forever if there's an active discussion.
-  const maxWaitForAttachments = fromMessageDate((firstLatest.raw as Types.Message).date)
+  const maxWaitForAttachments = fromMessageDate((firstLatest.raw).date)
     .add({ seconds: 10 })
   while(true) {
     const now = T.Now.instant()
@@ -355,9 +355,7 @@ async function reply(
     return
   }
 
-  const messages = messagesRaw.map(({ raw }) => {
-    const msg = raw as Types.Message
-
+  const messages = messagesRaw.map(({ raw: msg }) => {
     return {
       msg,
       photos: ((): Photo[] => {
