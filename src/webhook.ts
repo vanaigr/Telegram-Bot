@@ -295,16 +295,16 @@ async function reply(
       'select', [
         Db.named(
           'totalLoading',
-          Db.func<typeof Db.dbTypes.integer>('count', '*')
+          Db.func<typeof Db.dbTypes.bigint>('count', '*')
         ),
       ],
       'from', t,
       'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
       'and', t.downloadStartDate, '>', Db.param(now.subtract({ seconds: 20 }).toJSON()),
       'and', Db.eq(t.status, Db.param('downloading' as const)),
-    ).then(it => it.at(0)?.totalLoading ?? 0)
+    ).then(it => it.at(0)?.totalLoading ?? 0n)
 
-    if(totalLoading === 0) {
+    if(totalLoading === 0n) {
       log.I('All images ready')
       break
     }
