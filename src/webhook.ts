@@ -25,6 +25,12 @@ export async function POST(req: Request) {
   const body = await req.json()
   //log.I('Body: ', [body])
   const message = body.message as Types.Message
+  if(message === undefined) {
+    log.I('What did it send to me? ', [body])
+    return new Response('')
+  }
+
+  log.I('Message ', [message.message_id], ' in chat ', [message.chat.id])
 
   const pool = DbClient.create(log)
   if(!pool) {
@@ -221,6 +227,7 @@ async function reply(
   chatId: number,
   completion: { sent: boolean },
 ) {
+  log.I('Locking ', [chatId])
   try {
     const maxWait = messageDate.add({ seconds: 20 })
     const waitFor = Math.floor(maxWait.since(T.Now.instant()).total('milliseconds'))
@@ -253,10 +260,12 @@ async function reply(
     // even if the lock is for an old message.
     return
   }
+  log.I('Locked ', [chatId])
   // Lock aquired - no new replies will be inserted.
 
   const firstLatest = await Db.query(conn,
     'select', [
+      Db.t.messages.messageId,
       Db.t.messages.raw,
       Db.named('hasResponse', Db.not(Db.isNull(Db.t.responses.sequenceNumber))),
     ],
@@ -264,7 +273,20 @@ async function reply(
 
     'left join', Db.t.responses,
     'on', Db.eq(Db.t.messages.chatId, Db.t.responses.respondsToChatId),
-    'and', Db.eq(Db.t.messages.messageId, Db.t.responses.respondsToMessageId),
+    // Find a response that has seen this message. Not = since the following is possible:
+    // 1. user sends message 1
+    // 2. bot starts generating response 1
+    // 3. user sends message 2
+    // 4. Bot locks waiting for response 1
+    // 5. User sends message 3
+    // 6. Bot locks waiting for response 1
+    // 7. Response 1 is generated and sent. Points at message 1
+    // 8. Response 2 logic runs, the latest message it sees is its own response.
+    // 9. Response 2 is generated and sent. Points at its own response
+    // 10. Response 3 logic runs, the latest user message doesn't have a direct response,
+    // since response 2 points at response 1. But response 2 did include messages
+    // 1-3 in history, so another response should not be generated.
+    'and', Db.t.messages.messageId, '<=', Db.t.responses.respondsToMessageId,
 
     'where', Db.eq(Db.t.messages.chatId, Db.param(BigInt(chatId))),
     'and', Db.eq(Db.t.messages.type, Db.param('user' as const)),
@@ -272,10 +294,15 @@ async function reply(
     'order by', Db.t.messages.messageId, 'desc',
     'limit 1',
   ).then(it => it.at(0))
-  if(firstLatest === undefined || firstLatest.hasResponse) {
-    log.I('Latest message already answered')
+  if(firstLatest === undefined) {
+    log.unreachable()
     return
   }
+  if(firstLatest.hasResponse) {
+    log.I('Latest message ', [firstLatest.messageId], ' is already answered')
+    return
+  }
+  log.I('Answering message ', [firstLatest.messageId])
   // Now we know that there is something to reply to.
 
   // Postpone responding for 10 seconds if some attachments are loading.
@@ -458,7 +485,7 @@ async function reply(
   const saveP = Db.insertMany(
     conn,
     Db.t.responses,
-    Db.omit(Db.d.responses, [ 'sequenceNumber' ]),
+    Db.omit(Db.d.responses, ['sequenceNumber']),
     [{
       respondsToChatId: chatId,
       respondsToMessageId: messages.at(-1)!.msg.message_id,
@@ -495,7 +522,7 @@ async function reply(
       [{
         chatId: newMessage.chat.id,
         messageId: newMessage.message_id,
-        date: T.Instant.fromEpochMilliseconds(newMessage.date * 1000).toJSON(),
+        date: fromMessageDate(newMessage.date).toJSON(),
         type: 'assistant',
         raw: JSON.stringify(newMessage),
       }],
