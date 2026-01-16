@@ -19,7 +19,6 @@ model messages {
     date DateTime @db.Timestamp(6)
     type messageType
     raw Json
-    needsResponse Boolean
 
     @@id([chatId, messageId])
 }
@@ -38,12 +37,20 @@ enum downloadStatus {
 }
 
 model photos {
-    file_unique_id String @db.VarChar(512) @id
+    chatId BigInt
+    // Not sure if it's globally unique or not. In any case we query them by
+    // chat, and it's easier to store chat id with it even if it may be duplicated now.
+    fileUniqueId String @db.VarChar(512)
+
     raw Json
     status downloadStatus
     bytes Bytes
+    downloadStartDate DateTime @db.Timestamp(6)
+
+    @@id([chatId, fileUniqueId])
 }
 
+// Locks `responses` for that chat
 model chatLocks {
     id BigInt @id
 }

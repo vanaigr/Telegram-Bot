@@ -48,7 +48,7 @@ export async function POST(req: Request) {
     return new Response(JSON.stringify({}))
   }
 
-  const needsResponse = await Db.timedTran(pool, async(db) => {
+  await Db.timedTran(pool, async(db) => {
     const dst = Db.t.messages
     const schema = Db.d.messages
     const src = Db.makeTable<typeof schema>('src')
@@ -57,26 +57,19 @@ export async function POST(req: Request) {
     const record: Db.ForInput<typeof schema> = {
       chatId: message.chat.id,
       messageId: message.message_id,
-      date: T.Instant.fromEpochMilliseconds(message.date * 1000).toJSON(),
+      date: fromMessageDate(message.date).toJSON(),
       type: 'user',
       raw: JSON.stringify(message),
-      needsResponse: true,
     }
 
-    const result = await Db.queryRaw<{ needsResponse: boolean }[]>(db,
+    await Db.queryRaw(db,
       'insert into', dst, Db.args(cols.map(it => dst[it].nameOnly)),
       'select', Db.list(cols.map(it => src[it])),
       'from', Db.arraysTable([record], schema), 'as', src,
       'on conflict', Db.args([dst.chatId.nameOnly, dst.messageId.nameOnly]), 'do nothing',
-      'returning', dst.needsResponse.nameOnly,
     )
-    return result.at(0)?.needsResponse ?? false
   })
   log.I('Added message')
-  if(!needsResponse) {
-    log.I('Already responded')
-    return
-  }
 
   const photoTask = (async() => {
     const photo = message.photo?.at(-1)
@@ -85,7 +78,7 @@ export async function POST(req: Request) {
     const l = log.addedCtx('photo ', [photo.file_unique_id])
 
     try {
-      await downloadPhoto(pool, l, photo)
+      await downloadPhoto(pool, l, message.chat.id, photo)
     }
     catch(error) {
       l.E([error])
@@ -99,7 +92,13 @@ export async function POST(req: Request) {
     const completion = { sent: false }
     try {
       await Db.tran(pool, async(db) => {
-        await reply(db, l, photoTask, message, completion)
+        await reply(
+          db,
+          l,
+          fromMessageDate(message.date),
+          message.chat.id,
+          completion
+        )
       })
     }
     catch(error) {
@@ -117,7 +116,12 @@ export async function POST(req: Request) {
   return new Response(JSON.stringify({}))
 }
 
-async function downloadPhoto(pool: Db.DbPool, log: L.Log, photo: Types.PhotoSize) {
+async function downloadPhoto(
+  pool: Db.DbPool,
+  log: L.Log,
+  chatId: number,
+  photo: Types.PhotoSize
+) {
   log.I('Downloading')
 
   await Db.timedTran(pool, async(db) => {
@@ -125,9 +129,10 @@ async function downloadPhoto(pool: Db.DbPool, log: L.Log, photo: Types.PhotoSize
     const schema = Db.d.photos
 
     const existing = await Db.query(db,
-      'select', [t.file_unique_id],
+      'select', [t.fileUniqueId],
       'from', t,
-      'where', Db.eq(t.file_unique_id, Db.param(photo.file_unique_id)),
+      'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
+      'and', Db.eq(t.fileUniqueId, Db.param(photo.file_unique_id)),
     ).then(it => it.at(0))
 
     if(existing) {
@@ -136,10 +141,12 @@ async function downloadPhoto(pool: Db.DbPool, log: L.Log, photo: Types.PhotoSize
     }
 
     await Db.insertMany(db, t, schema, [{
-      file_unique_id: photo.file_unique_id,
+      chatId,
+      fileUniqueId: photo.file_unique_id,
       raw: JSON.stringify(photo),
       status: 'downloading',
       bytes: Buffer.from([]),
+      downloadStartDate: T.Now.instant().toJSON(),
     }], {})
 
     try {
@@ -188,7 +195,8 @@ async function downloadPhoto(pool: Db.DbPool, log: L.Log, photo: Types.PhotoSize
           Db.set(t.status, Db.param('done' as const)),
           Db.set(t.bytes, Db.param(buffer)),
         ]),
-        'where', Db.eq(t.file_unique_id, Db.param(photo.file_unique_id)),
+        'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
+        'and', Db.eq(t.fileUniqueId, Db.param(photo.file_unique_id)),
       )
     }
     catch(error) {
@@ -199,28 +207,29 @@ async function downloadPhoto(pool: Db.DbPool, log: L.Log, photo: Types.PhotoSize
         'set', Db.list([
           Db.set(t.status, Db.param('error' as const)),
         ]),
-        'where', Db.eq(t.file_unique_id, Db.param(photo.file_unique_id)),
+        'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
+        'and', Db.eq(t.fileUniqueId, Db.param(photo.file_unique_id)),
       )
     }
   })
 }
 
 async function reply(
-  conn: Db.DbTransaction, // not actually a transaction
+  conn: Db.DbTransaction,
   log: L.Log,
-  photoTask: Promise<unknown>,
-  message: Types.Message,
+  messageDate: T.Instant,
+  chatId: number,
   completion: { sent: boolean },
 ) {
-  const maxWait = T.Instant.fromEpochMilliseconds(message.date * 1000).add({ seconds: 15 })
   try {
+    const maxWait = messageDate.add({ seconds: 20 })
     const waitFor = Math.floor(maxWait.since(T.Now.instant()).total('milliseconds'))
     if(waitFor <= 10) {
       log.E('Not sending message - timed out 1')
       return
     }
 
-    const lockId = BigInt(message.chat.id)
+    const lockId = BigInt(chatId)
 
     const lock = Db.t.chatLocks
     await Db.queryRaw(conn, 'set lock_timeout = ' + waitFor)
@@ -238,23 +247,70 @@ async function reply(
   }
   catch(error) {
     log.E('Not sending message - could not aquire chat lock: ', [error])
+    // If the lock is locked by someone else all this time, the message
+    // is no longer relevant, so we can exit. Future messages are running
+    // the same logic, so they will respond eventually (or be irrelevant)
+    // even if the lock is for an old message.
     return
   }
+  // Lock aquired - no new replies will be inserted.
 
-  const timedOut = {}
-  const timeout = U.delay(maxWait).then(() => timedOut)
-  const result = await Promise.race([timeout, photoTask])
-  if(result === timedOut) {
-    log.E('Not sending message - timed out 2')
+  const firstLatest = await Db.query(conn,
+    'select', [Db.t.messages.type, Db.t.messages.raw],
+    'from', Db.t.messages,
+    'where', Db.eq(Db.t.messages.chatId, Db.param(BigInt(chatId))),
+    'order by', Db.t.messages.messageId, 'desc',
+    'limit 1',
+  ).then(it => it.at(0))
+  if(firstLatest?.type !== 'user') {
+    log.I('Latest message already answered')
     return
+  }
+  // Now we know that there is something to reply to.
+
+  // Postpone responding for 10 seconds if some attachments are loading.
+  // If newer messages arrive, we may not send their images, but we don't
+  // want the bot to get stuck forever if there's an active discussion.
+  const maxWaitForAttachments = fromMessageDate((firstLatest.raw as Types.Message).date)
+    .add({ seconds: 10 })
+  while(true) {
+    const now = T.Now.instant()
+    if(T.Instant.compare(now, maxWaitForAttachments) >= 0) {
+      log.W('Time for images expired. Sending as-is')
+      break
+    }
+
+    const t = Db.t.photos
+    const totalLoading = await Db.query(conn,
+      'select', [
+        Db.named(
+          'totalLoading',
+          Db.func<typeof Db.dbTypes.integer>('count', '*')
+        ),
+      ],
+      'from', t,
+      'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
+      'and', t.downloadStartDate, '>', Db.param(now.subtract({ seconds: 20 }).toJSON()),
+      'and', Db.eq(t.status, Db.param('downloading' as const)),
+    ).then(it => it.at(0)?.totalLoading ?? 0)
+
+    if(totalLoading === 0) {
+      log.I('All images ready')
+      break
+    }
+
+    log.I('Images being loaded: ', [totalLoading], '. Rechecking in ', [1], 's')
+
+    let until = now.add({ seconds: 1 })
+    if(T.Instant.compare(maxWaitForAttachments, until) < 0) until = maxWaitForAttachments
+    await U.delay(until)
   }
 
   const t = Db.t.messages
   const messagesRaw = await Db.query(conn,
     'select', [t.raw],
     'from', t,
-    'where', t.date, '<=', Db.param(T.Instant.fromEpochMilliseconds(message.date * 1000).toJSON()),
-    'and', Db.eq(t.chatId, Db.param(BigInt(message.chat.id))),
+    'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
     'order by', t.messageId, 'asc', // date resolution is too low
   )
   if(messagesRaw.length === 0) {
@@ -296,14 +352,15 @@ async function reply(
     const t = Db.t.photos
     const arrayP = Db.param([...fileUniqueIds])
     const photoRows = await Db.query(conn,
-      'select', [t.status, t.bytes, t.file_unique_id, t.raw],
+      'select', [t.status, t.bytes, t.fileUniqueId, t.raw],
       'from', t,
-      'where', t.file_unique_id, '=', Db.func('any', arrayP),
+      'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
+      'and', t.fileUniqueId, '=', Db.func('any', arrayP),
       'and', Db.eq(t.status, Db.param('done' as const)),
-      'order by', Db.func('array_position', arrayP, t.file_unique_id),
+      'order by', Db.func('array_position', arrayP, t.fileUniqueId),
       'limit 5',
     )
-    const photoRowsById = new Map(photoRows.map(it => [it.file_unique_id, it]))
+    const photoRowsById = new Map(photoRows.map(it => [it.fileUniqueId, it]))
 
     for(const message of messages) {
       for(const photo of message.photos) {
@@ -388,20 +445,13 @@ async function reply(
   })
   log.I('Responded')
 
-  const updateP = Db.queryRaw(conn,
-    'update', Db.t.messages,
-    'set', Db.set(Db.t.messages.needsResponse, Db.param(false)),
-    'where', Db.eq(Db.t.messages.chatId, Db.param(BigInt(message.chat.id))),
-    'and', Db.eq(Db.t.messages.messageId, Db.param(BigInt(message.message_id))),
-  )
-
   const saveP = Db.insertMany(
     conn,
     Db.t.responses,
     Db.omit(Db.d.responses, [ 'sequenceNumber' ]),
     [{
-      respondsToChatId: message.chat.id,
-      respondsToMessageId: message.message_id,
+      respondsToChatId: chatId,
+      respondsToMessageId: messages.at(-1)!.msg.message_id,
       raw: JSON.stringify(response),
     }],
     {}
@@ -415,7 +465,7 @@ async function reply(
     }
 
     log.I('Sending response')
-    const responseResult = await sendMessage(message.chat.id, output, log)
+    const responseResult = await sendMessage(chatId, output, log)
     if(responseResult.status !== 'ok') {
       return
     }
@@ -438,13 +488,12 @@ async function reply(
         date: T.Instant.fromEpochMilliseconds(newMessage.date * 1000).toJSON(),
         type: 'assistant',
         raw: JSON.stringify(newMessage),
-        needsResponse: false,
       }],
       {}
     )
   })()
 
-  await U.all([updateP, saveP, sendResponseP])
+  await U.all([saveP, sendResponseP])
   log.I('Done responding')
 }
 
@@ -479,4 +528,8 @@ async function sendMessage(chatId: number, text: string, log: L.Log) {
       text,
     }),
   })
+}
+
+function fromMessageDate(messageDate: number) {
+  return T.Instant.fromEpochMilliseconds(messageDate * 1000)
 }

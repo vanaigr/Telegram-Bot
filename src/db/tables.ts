@@ -79,7 +79,6 @@ export const tables = {
         "date": t_timestamp,
         "type": t_messageType,
         "raw": t_json,
-        "needsResponse": t_boolean,
     },
     "responses": {
         "sequenceNumber": t_integer,
@@ -88,10 +87,12 @@ export const tables = {
         "respondsToMessageId": t_bigint,
     },
     "photos": {
-        "file_unique_id": t_text,
+        "chatId": t_bigint,
+        "fileUniqueId": t_text,
         "raw": t_json,
         "status": t_downloadStatus,
         "bytes": t_bytea,
+        "downloadStartDate": t_timestamp,
     },
     "chatLocks": {
         "id": t_bigint,
