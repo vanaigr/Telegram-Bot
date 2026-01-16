@@ -47,3 +47,7 @@ model photos {
 model chatLocks {
     id BigInt @id
 }
+
+model chatWhitelist {
+    id BigInt @id
+}

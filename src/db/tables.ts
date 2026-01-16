@@ -96,4 +96,7 @@ export const tables = {
     "chatLocks": {
         "id": t_bigint,
     },
+    "chatWhitelist": {
+        "id": t_bigint,
+    },
 } as const

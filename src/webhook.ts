@@ -34,6 +34,19 @@ export async function POST(req: Request) {
   }
   attachDatabasePool(pool)
 
+  const whitelisted = await Db.query(pool,
+    'select', [Db.t.chatWhitelist.id],
+    'from', Db.t.chatWhitelist,
+    'where', Db.eq(Db.t.chatWhitelist.id, Db.param(BigInt(message.chat.id))),
+  ).then(it => it.at(0)?.id !== undefined)
+
+  if(!whitelisted) {
+    const emojis = ['🙂', '😳', '👉👈', '😡']
+    const text = 'А вы кто ' + emojis[Math.floor(Math.random() * emojis.length)] + '?'
+    await sendMessage(message.chat.id, text, log)
+    return
+  }
+
   const needsResponse = await Db.timedTran(pool, async(db) => {
     const dst = Db.t.messages
     const schema = Db.d.messages
@@ -82,13 +95,19 @@ export async function POST(req: Request) {
   const replyTask = (async() => {
     const l = log.addedCtx('reply')
 
+    const completion = { sent: false }
     try {
       await Db.tran(pool, async(db) => {
-        await reply(db, l, begin, photoTask, message)
+        await reply(db, l, begin, photoTask, message, completion)
       })
     }
     catch(error) {
       l.E([error])
+      if(!completion.sent) {
+        const emojis = ['🙂', '💀', '☠']
+        const text = 'Бот шандарахнулся ' + emojis[Math.floor(Math.random() * emojis.length)]
+        await sendMessage(message.chat.id, text, log)
+      }
     }
     // not returning db since it doesn't mater + its state is changed
   })()
@@ -191,6 +210,7 @@ async function reply(
   begin: T.Instant,
   photoTask: Promise<unknown>,
   message: Types.Message,
+  completion: { sent: boolean },
 ) {
   const maxWait = begin.add({ seconds: 15 })
   try {
@@ -382,16 +402,7 @@ async function reply(
     }
 
     log.I('Sending response')
-    const responseResult = await U.request<TelegramWrapper<Types.Message>>({
-      url: new URL(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN!}/sendMessage`),
-      log,
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: message.chat.id,
-        text: output,
-      }),
-    })
+    const responseResult = await sendMessage(message.chat.id, output, log)
     if(responseResult.status !== 'ok') {
       return
     }
@@ -400,6 +411,8 @@ async function reply(
       return
     }
     const newMessage = responseResult.data.result
+
+    completion.sent = true
 
     log.I('Inserting response')
     await Db.insertMany(
@@ -442,4 +455,17 @@ type Photo = {
   status: 'done' | 'downloading' | 'error' | 'not-available'
   data: Buffer
   info: Types.PhotoSize
+}
+
+async function sendMessage(chatId: number, text: string, log: L.Log) {
+  return await U.request<TelegramWrapper<Types.Message>>({
+    url: new URL(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN!}/sendMessage`),
+    log: log.addedCtx('sendMessage'),
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+    }),
+  })
 }
