@@ -41,6 +41,8 @@ export async function POST(req: Request) {
   ).then(it => it.at(0)?.id !== undefined)
 
   if(!whitelisted) {
+    log.W('Chat ', [message.chat.id], ' is not whitelisted')
+
     const emojis = ['🙂', '😳', '👉👈', '😡']
     const text = 'А вы кто ' + emojis[Math.floor(Math.random() * emojis.length)] + '?'
     await sendMessage(message.chat.id, text, log)
