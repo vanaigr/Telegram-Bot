@@ -256,13 +256,23 @@ async function reply(
   // Lock aquired - no new replies will be inserted.
 
   const firstLatest = await Db.query(conn,
-    'select', [Db.t.messages.type, Db.t.messages.raw],
+    'select', [
+      Db.t.messages.raw,
+      Db.named('hasResponse', Db.not(Db.isNull(Db.t.responses.sequenceNumber))),
+    ],
     'from', Db.t.messages,
+
+    'left join', Db.t.responses,
+    'on', Db.eq(Db.t.messages.chatId, Db.t.responses.respondsToChatId),
+    'and', Db.eq(Db.t.messages.messageId, Db.t.responses.respondsToMessageId),
+
     'where', Db.eq(Db.t.messages.chatId, Db.param(BigInt(chatId))),
+    'and', Db.eq(Db.t.messages.type, Db.param('user' as const)),
+
     'order by', Db.t.messages.messageId, 'desc',
     'limit 1',
   ).then(it => it.at(0))
-  if(firstLatest?.type !== 'user') {
+  if(firstLatest === undefined || firstLatest.hasResponse) {
     log.I('Latest message already answered')
     return
   }

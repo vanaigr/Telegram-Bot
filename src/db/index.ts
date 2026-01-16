@@ -93,6 +93,14 @@ export function eq<T>(
   return Q.scalar<Q.DbTypeInfo<boolean, boolean | (null extends T ? null : never)>>(a, '=', b);
 }
 
+export function not<T extends boolean | null>(a: Q.ScalarExpr<Q.DbTypeInfo<never, T>>) {
+  return Q.scalar<Q.DbTypeInfo<boolean, boolean | (null extends T ? null : never)>>('not', a)
+}
+
+export function isNull<T>(a: Q.ScalarExpr<T>) {
+  return Q.scalar<Q.DbTypeInfo<boolean, boolean>>(par(a, 'is null'))
+}
+
 export function setJson<T>(a: Q.Column<unknown, Q.DbTypeInfo<string, T>>, value: T) {
   return [a.nameOnly, '=', Q.param(JSON.stringify(value)), '::json'];
 }
