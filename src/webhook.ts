@@ -128,13 +128,13 @@ export async function POST(req: Request) {
       }
       catch(error) {
         l.E([error])
-        if(!completion.sent) {
-          const emojis = ['🙂', '💀', '☠']
-          const text = 'Бот шандарахнулся ' + emojis[Math.floor(Math.random() * emojis.length)]
-          await sendMessage(message.chat.id, text, log)
-        }
       }
-      // not returning db since it doesn't mater + its state is changed
+
+      if(!completion.sent) {
+        const emojis = ['🙂', '💀', '☠']
+        const text = 'Бот шандарахнулся ' + emojis[Math.floor(Math.random() * emojis.length)]
+        await sendMessage(message.chat.id, text, log)
+      }
     })()
     waitUntil(replyTask)
   }
@@ -477,54 +477,123 @@ async function reply(
     }
   }))
 
-  log.I('Sending conversation')
+  let reply: string | undefined
+  let reactionsToSend: { emoji: string, messageId: number }[] = []
   const openRouter = new OpenRouter({ apiKey: process.env.OPENROUTER_KEY! });
-  const response = await openRouter.chat.send({
-    //model: 'openai/gpt-5-mini', // слишком стерильный
-    //model: 'openai/chatgpt-4o-latest', // тоже наверно
-    //model: 'x-ai/grok-4.1-fast', // not super coherent
-    //model: 'google/gemini-2.5-flash-lite',
-    model: 'google/gemini-3-flash-preview',
-    //model: 'moonshotai/kimi-k2-0905',
-    //model: 'moonshotai/kimi-k2-thinking',
-    //model: 'openai/gpt-oss-120b', // explodes
-    provider: {
-      dataCollection: 'deny',
-    },
-    reasoning: {
-      effort: 'medium',
-    },
-    stream: false,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      ...openrouterMessages,
-    ],
-  })
-  log.I('Responded')
+  while(true) {
+    log.I('Sending conversation')
+
+    const response = await openRouter.chat.send({
+      //model: 'openai/gpt-5-mini', // слишком стерильный
+      //model: 'openai/chatgpt-4o-latest', // тоже наверно
+      //model: 'x-ai/grok-4.1-fast', // not super coherent
+      //model: 'google/gemini-2.5-flash-lite',
+      model: 'google/gemini-3-flash-preview',
+      //model: 'moonshotai/kimi-k2-0905',
+      //model: 'moonshotai/kimi-k2-thinking',
+      //model: 'openai/gpt-oss-120b', // explodes
+      provider: {
+        dataCollection: 'deny',
+      },
+      reasoning: {
+        effort: 'medium',
+      },
+      tools: [
+        {
+          type: 'function',
+          function: {
+            name: 'message_reaction',
+            description: 'Adds an emoji reaction to a message',
+            //description: 'Adds an emoji reaction to a message. Valid emojis: ' + validEmojis.join(', '),
+            parameters: {
+              type: 'object',
+              properties: {
+                emoji: { type: 'string' },
+                messageId: { type: 'string' },
+              },
+              required: ['emoji', 'messageId'],
+            }
+
+          },
+        }
+      ],
+      stream: false,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...openrouterMessages,
+      ],
+    })
+    log.I('Responded')
+
+    await Db.insertMany(
+      conn,
+      Db.t.responses,
+      Db.omit(Db.d.responses, ['sequenceNumber']),
+      [{
+        respondsToChatId: chatId,
+        respondsToMessageId: messages.at(-1)!.msg.message_id,
+        raw: JSON.stringify(response),
+      }],
+      {}
+    )
+
+    const finishReason = response.choices[0].finishReason
+    if(finishReason === 'tool_calls') {
+      openrouterMessages.push(response.choices[0].message)
+
+      for(const tool of response.choices[0].message.toolCalls!) {
+        const args = JSON.parse(tool.function.arguments)
+        log.I('Tool call ', tool.function.name, ' with ', [args])
+
+        if(tool.function.name === 'message_reaction') {
+          const { emoji, messageId: messageIdRaw } = args
+
+          openrouterMessages.push({
+            role: 'tool',
+            toolCallId: tool.id,
+            //name: tool.function.name,
+            content: 'done',
+          })
+
+          const messageId = parseInt(messageIdRaw)
+          if(isFinite(messageId)) {
+            if(validEmojis.includes(emoji)) {
+              reactionsToSend.push({ emoji, messageId })
+            }
+            else {
+              reactionsToSend.push({ emoji: '❤', messageId })
+            }
+          }
+          else {
+            log.W('Malformed reaction: ', [JSON.parse(tool.function.arguments)])
+          }
+        }
+      }
+    }
+    else if(finishReason === 'stop') {
+      const content = response.choices[0].message.content
+      if(typeof content === 'string') {
+        reply = content
+      }
+      else {
+        log.W('Weird content ', [content])
+        reply = ''
+      }
+      break
+    }
+  }
 
   cancelTypingStatus()
 
-  const saveP = Db.insertMany(
-    conn,
-    Db.t.responses,
-    Db.omit(Db.d.responses, ['sequenceNumber']),
-    [{
-      respondsToChatId: chatId,
-      respondsToMessageId: messages.at(-1)!.msg.message_id,
-      raw: JSON.stringify(response),
-    }],
-    {}
-  )
-
-  const sendResponseP = (async() => {
-    const output = response.choices[0].message.content!.toString().trim()
-    if(output === '<empty>' || output === '<>' || output === '') {
+  const sendingP = (async() => {
+    if(reply === '<empty>' || reply === '<>' || reply === '') {
       log.I('Empty response')
+      completion.sent = true
       return
     }
 
     log.I('Sending response')
-    const responseResult = await sendMessage(chatId, output, log)
+    const responseResult = await sendMessage(chatId, reply, log)
     if(responseResult.status !== 'ok') {
       return
     }
@@ -533,7 +602,6 @@ async function reply(
       return
     }
     const newMessage = responseResult.data.result
-
     completion.sent = true
 
     log.I('Inserting response')
@@ -552,7 +620,15 @@ async function reply(
     )
   })()
 
-  await U.all([saveP, sendResponseP])
+  const reactingP = (async() => {
+    await U.all(reactionsToSend.map(async(reaction) => {
+      await setMessageReaction(chatId, reaction.messageId, reaction.emoji, log)
+    }))
+    completion.sent = true
+  })()
+
+  await U.all([sendingP, reactingP])
+
   log.I('Done responding')
 }
 
@@ -561,9 +637,11 @@ type TelegramWrapper<T> = { ok: true, result: T } | { ok: false, description: st
 const systemPrompt = `
 You are a group chat participant, a typical 20-something year old. Write a reply if you think users would appreciate it or if they ask you (@balbes52_bot, Балбес, etc.). Reply <empty> (with angle brackets) if you think users are talkning between themselves and would not appreciate your interruption.
 
-Don't write essays. Nobody wants to read a lot.
-Users don't see empty messages. If there's an error, tell them that.
-If the users are hinting or saying that they don't want to continue the conversation, stop. Don't respond that you are stopping, just say <empty>. It's better to not respond and make users ping you than you sending too many messages.
+Rules:
+1. Don't write essays. Nobody wants to read a lot.
+2. Users don't see empty messages. If there's an error, tell them that.
+3. If the users are hinting or saying that they don't want to continue the conversation, stop. Don't respond that you are stopping, just say <empty>. It's better to not respond and make users ping you than you sending too many messages.
+4. If you can capture your response as a single emoji, use 'message_reaction' tool. You won't see your own reactions in history. If you think a reaction is enough, use the tool and respond with <empty>.
 
 `.trim() + '\n'
 
@@ -603,12 +681,40 @@ async function sendChatAction(chatId: number, log: L.Log) {
   })
 }
 
+async function setMessageReaction(chatId: number, messageId: number, emoji: string, log: L.Log) {
+  const l = log.addedCtx('setMessageReaction(', [chatId], ', ', [messageId], ', ', [emoji], ')')
+
+  const result = await U.request<TelegramWrapper<{}>>({
+    url: new URL(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN!}/setMessageReaction`),
+    log: l,
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      message_id: messageId,
+      reaction: [{
+        type: 'emoji',
+        emoji,
+      }],
+    }),
+  })
+  if(result.status !== 'ok') return false
+  if(!result.data.ok) {
+    l.E('Response error: ', [result.data.description])
+    return false
+  }
+  return true
+}
+
 function fromMessageDate(messageDate: number) {
   return T.Instant.fromEpochMilliseconds(messageDate * 1000)
 }
 
 function messageToText(msg: Types.Message) {
   let text = ''
+
+  text += 'messageId: ' + msg.message_id + '\n'
+
   if(msg.from) {
     const fullName = msg.from.first_name + ' ' + (msg.from.last_name ?? '')
     text += 'From: ' + fullName.trim()
@@ -663,3 +769,5 @@ function startTypingTask(chatId: number, log: L.Log) {
     clearTimeout(timeoutId)
   }
 }
+
+const validEmojis = ["❤", "👍", "👎", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱", "🤬", "😢", "🎉", "🤩", "🤮", "💩", "🙏", "👌", "🕊", "🤡", "🥱", "🥴", "😍", "🐳", "❤‍🔥", "🌚", "🌭", "💯", "🤣", "⚡", "🍌", "🏆", "💔", "🤨", "😐", "🍓", "🍾", "💋", "🖕", "😈", "😴", "😭", "🤓", "👻", "👨‍💻", "👀", "🎃", "🙈", "😇", "😨", "🤝", "✍", "🤗", "🫡", "🎅", "🎄", "☃", "💅", "🤪", "🗿", "🆒", "💘", "🙉", "🦄", "😘", "💊", "🙊", "😎", "👾", "🤷‍♂", "🤷", "🤷‍♀", "😡"]
