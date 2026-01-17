@@ -526,7 +526,7 @@ export async function reply(
       //model: 'openai/chatgpt-4o-latest', // тоже наверно
       //model: 'x-ai/grok-4.1-fast', // not super coherent
       //model: 'google/gemini-2.5-flash-lite',
-      model: 'google/gemini-3-flash-preview:online',
+      model: 'google/gemini-3-flash-preview',
       //model: 'moonshotai/kimi-k2-0905',
       //model: 'moonshotai/kimi-k2-thinking',
       //model: 'openai/gpt-oss-120b', // explodes
@@ -718,7 +718,6 @@ Rules:
 2. Users don't see empty messages. If there's an error, tell them that.
 3. If the users are hinting or saying that they don't want to continue the conversation, stop. Don't respond that you are stopping, just say <empty>. It's better to not respond and make users ping you than you sending too many messages.
 4. If you can capture your response as a single emoji, use 'message_reaction' tool. If you think a reaction is enough, use the tool and respond with <empty>.
-5. Use search only if express permission for this search has been given. Ask for permission and warn users it is expensive.
 
 `.trim() + '\n'
 
