@@ -66,3 +66,12 @@ export async function all<T extends readonly unknown[] | []>(
   // eslint-disable-next-line local/no-promise-all
   return await Promise.all(values);
 }
+
+export function getHash(...fields: unknown[]) {
+  let result = '';
+  for (const it of fields) {
+    const el = '' + it;
+    result += el.length.toString(36) + '$' + el;
+  }
+  return result;
+}

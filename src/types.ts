@@ -1,14 +1,17 @@
+export type Chat = {
+  id: number
+}
+export type User = {
+  id: number
+  first_name: string
+  last_name?: string
+  username: string
+}
 
 export type Message = {
   message_id: number
-  chat: {
-    id: number
-  }
-  from?: {
-    first_name: string
-    last_name?: string
-    username: string
-  }
+  chat: Chat
+  from?: User
   text?: string
   caption?: string
   photo?: PhotoSize[]
@@ -31,3 +34,16 @@ export type File = {
   file_size: number
   file_path: string
 }
+
+export type MessageReactionUpdated = {
+  chat: Chat
+  message_id: number
+  user?: User
+  actor_chat?: Chat
+  date: number
+  new_reaction: ReactionType[]
+}
+
+export type ReactionType = { type: 'emoji', emoji: string }
+  | { type: 'custom_emoji', custom_emoji_id: string }
+  | { type: 'paid' }

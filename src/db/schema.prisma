@@ -23,6 +23,16 @@ model messages {
     @@id([chatId, messageId])
 }
 
+model reactions {
+    chatId BigInt
+    messageId BigInt
+    hash String
+
+    raw Json
+
+    @@id([chatId, messageId, hash])
+}
+
 model messagesBackup {
     sequenceNumber Int @id @default(autoincrement())
 
