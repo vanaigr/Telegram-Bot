@@ -344,12 +344,14 @@ export async function reply(
     }
 
     let text = ''
+    text += JSON.stringify(messageHeaders(msg, reactions)) + '\n'
     if(msg.reply_to_message) {
-      const reply = messageToText(msg.reply_to_message, undefined)
-      text += reply.trim().split('\n').map(it => '> ' + it).join('\n')
+      text += '> ' + JSON.stringify(messageHeaders(msg.reply_to_message, undefined))
+      const replyText = messageText(msg.reply_to_message)
+      text += replyText.split('\n').map(it => '> ' + it).join('\n')
       text += '\n'
     }
-    text += messageToText(msg, reactions)
+    text += messageText(msg) + '\n'
 
     return {
       role: 'user',
@@ -639,28 +641,24 @@ export function fromMessageDate(messageDate: number) {
   return T.Instant.fromEpochMilliseconds(messageDate * 1000)
 }
 
-export function messageToText(
+export function messageHeaders(
   msg: Types.Message,
   reactions: Types.MessageReactionUpdated[] | undefined
 ) {
-  let text = ''
-
-  text += 'messageId: ' + msg.message_id + '\n'
-
+  const headers: Record<string, unknown> = {}
+  headers.messageId = msg.message_id
   if(msg.from) {
-    text += 'From: ' + userToString(msg.from)
+    headers.from = userToString(msg.from)
   }
   else {
-    text += 'From: chat'
+    headers.from = userToString(adminUser)
   }
-  text += '\n'
 
-  text += 'At: '
-  text += dateToString(fromMessageDate(msg.date))
-  text += '\n'
+  headers.at = dateToString(fromMessageDate(msg.date))
 
   if(reactions) {
-    const lines: string[] = []
+    const reactionsObj: Record<string, unknown> = {}
+
     for(const reaction of reactions) {
       const result: string[] = []
       for(const point of reaction.new_reaction) {
@@ -680,27 +678,23 @@ export function messageToText(
         })
       }
 
-      lines.push(name + ' - ' + result.join(''))
+      reactionsObj[name] = result.join('')
     }
 
-    if(lines.length > 0) {
-      text += 'Reactions: '
-      text += lines.join(', ')
-      text += '\n'
+    if(Object.keys(reactionsObj).length > 0) {
+      headers.reactions = reactionsObj
     }
   }
 
   if(msg.edit_date !== undefined) {
-    text += 'Edited at: '
-    text += dateToString(fromMessageDate(msg.edit_date))
-    text += '\n'
+    headers.editedAt = dateToString(fromMessageDate(msg.edit_date))
   }
 
-  text += '\n'
-  text += (msg.text ?? msg.caption ?? '<no message>').trim()
-  text += '\n'
+  return headers
+}
 
-  return text
+export function messageText(msg: Types.Message) {
+  return (msg.text ?? msg.caption ?? '<no message>').trim()
 }
 
 function userToString(user: Types.User) {
@@ -738,3 +732,9 @@ function startTypingTask(chatId: number, log: L.Log) {
 }
 
 const validEmojis = ["❤", "👍", "👎", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱", "🤬", "😢", "🎉", "🤩", "🤮", "💩", "🙏", "👌", "🕊", "🤡", "🥱", "🥴", "😍", "🐳", "❤‍🔥", "🌚", "🌭", "💯", "🤣", "⚡", "🍌", "🏆", "💔", "🤨", "😐", "🍓", "🍾", "💋", "🖕", "😈", "😴", "😭", "🤓", "👻", "👨‍💻", "👀", "🎃", "🙈", "😇", "😨", "🤝", "✍", "🤗", "🫡", "🎅", "🎄", "☃", "💅", "🤪", "🗿", "🆒", "💘", "🙉", "🦄", "😘", "💊", "🙊", "😎", "👾", "🤷‍♂", "🤷", "🤷‍♀", "😡"]
+
+const adminUser: Types.User = {
+  id: -1,
+  username: "GroupAnonymousBot",
+  first_name: "Group"
+}

@@ -55,7 +55,7 @@ if(!pool) throw new Error()
   })
 
 const o = messages.map(({ msg, reactions }) => {
-  return Logic.messageToText(msg, reactions)
+  return JSON.stringify(Logic.messageHeaders(msg, reactions)) + '\n' + Logic.messageText(msg)
 })
 
 console.log(util.inspect(o, { maxArrayLength: Infinity, depth: Infinity }))
