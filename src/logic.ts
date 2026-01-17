@@ -204,6 +204,7 @@ export async function downloadPhoto(
 }
 
 export async function reply(
+  pool: Db.DbPool,
   conn: Db.DbTransaction,
   log: L.Log,
   messageDate: T.Instant,

@@ -148,6 +148,7 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
       try {
         await Db.tran(pool, async(db) => {
           await Logic.reply(
+            pool,
             db,
             l,
             Logic.fromMessageDate(message.date),
