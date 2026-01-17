@@ -342,6 +342,28 @@ export async function reply(
         content: msg.text,
       }
     }
+    else if(msg.new_chat_title !== undefined) {
+      return {
+        role: 'user',
+        content: JSON.stringify({ newChatTitle: msg.new_chat_title }),
+      }
+    }
+    else if(msg.new_chat_members !== undefined) {
+      return {
+        role: 'user',
+        content: JSON.stringify({
+          newChatMembers: msg.new_chat_members.map(it => userToString(it)),
+        }),
+      }
+    }
+    else if(msg.left_chat_member !== undefined) {
+      return {
+        role: 'user',
+        content: JSON.stringify({
+          leftChatMember: userToString(msg.left_chat_member),
+        }),
+      }
+    }
 
     let text = ''
     text += JSON.stringify(messageHeaders(msg, reactions)) + '\n'
@@ -380,6 +402,22 @@ export async function reply(
             text: '<image not available>',
           }
         })),
+        ...(() => {
+          const audio = msg.audio
+          if(audio === undefined) return []
+          return [{
+            type: 'text' as const,
+            text: '<audio not available>',
+          }]
+        })(),
+        ...(() => {
+          const video = msg.video
+          if(video === undefined) return []
+          return [{
+            type: 'text' as const,
+            text: '<video not available>',
+          }]
+        })(),
       ]
     }
   }))

@@ -15,9 +15,16 @@ export type Message = {
   text?: string
   caption?: string
   photo?: PhotoSize[]
+  video?: unknown
+  audio?: unknown
   reply_to_message?: Message
   edit_date?: number
   date: number
+
+
+  new_chat_members?: User[]
+  left_chat_member?: User
+  new_chat_title?: string
 }
 
 export type PhotoSize = {
