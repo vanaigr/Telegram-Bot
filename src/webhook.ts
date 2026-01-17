@@ -62,28 +62,12 @@ async function handleReaction(log: L.Log, reaction: Types.MessageReactionUpdated
 
   log.I('Updating reaction')
 
-  const dst = Db.t.reactions
-  const schema = Db.d.reactions
-  const cols = Db.keys(schema)
-  const src = Db.makeTable<typeof schema>('src')
-  const excluded = Db.makeTable<typeof schema>('excluded')
-
-  const record: Db.ForInput<typeof schema> = {
+  await Logic.updateReactionRows(pool, [{
     chatId: reaction.chat.id,
     messageId: reaction.message_id,
     hash,
     raw: JSON.stringify(reaction),
-  }
-
-  await Db.queryRaw(pool,
-    'insert into', dst, Db.args(cols.map(it => dst[it].nameOnly)),
-    'select', Db.list(cols.map(it => src[it])),
-    'from', Db.arraysTable([record], schema), 'as', src,
-    'on conflict', Db.args([dst.chatId.nameOnly, dst.messageId.nameOnly, dst.hash.nameOnly]),
-    'do update set', Db.list([
-      [dst.raw.nameOnly, '=', excluded.raw],
-    ]),
-  )
+  }])
 
   log.I('done')
 

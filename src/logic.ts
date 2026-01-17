@@ -10,6 +10,29 @@ import * as L from './lib/log.ts'
 import * as U from './lib/util.ts'
 import type * as Types from './types.ts'
 
+export async function updateReactionRows(
+  conn: Db.DbConnOrPool,
+  reactions: Db.ForInput<typeof Db.d.reactions>[],
+) {
+  if(reactions.length === 0) return
+
+  const dst = Db.t.reactions
+  const schema = Db.d.reactions
+  const cols = Db.keys(schema)
+  const src = Db.makeTable<typeof schema>('src')
+  const excluded = Db.makeTable<typeof schema>('excluded')
+
+  await Db.queryRaw(conn,
+    'insert into', dst, Db.args(cols.map(it => dst[it].nameOnly)),
+    'select', Db.list(cols.map(it => src[it])),
+    'from', Db.arraysTable(reactions, schema), 'as', src,
+    'on conflict', Db.args([dst.chatId.nameOnly, dst.messageId.nameOnly, dst.hash.nameOnly]),
+    'do update set', Db.list([
+      [dst.raw.nameOnly, '=', excluded.raw],
+    ]),
+  )
+}
+
 export async function downloadPhoto(
   pool: Db.DbPool,
   log: L.Log,
@@ -502,14 +525,38 @@ export async function reply(
     )
   })()
 
+  const reactions = [...new Map(reactionsToSend.map(it => [it.messageId, it])).values()]
+
+  const dbReactionsP = (async() => {
+    const now = Math.floor(T.Now.instant().epochMilliseconds / 1000)
+    await updateReactionRows(conn, reactions.map(it => {
+      return {
+        chatId,
+        messageId: it.messageId,
+        hash: U.getHash('bot'),
+        raw: JSON.stringify({
+          chat: { id: chatId },
+          message_id: it.messageId,
+          date: now,
+          user: {
+            id: -1,
+            first_name: 'балбес',
+            username: 'balbes52_bot',
+          },
+          new_reaction: [{ type: 'emoji', emoji: it.emoji }],
+        } satisfies Types.MessageReactionUpdated),
+      }
+    }))
+  })()
+
   const reactingP = (async() => {
-    await U.all(reactionsToSend.map(async(reaction) => {
+    await U.all(reactions.map(async(reaction) => {
       await setMessageReaction(chatId, reaction.messageId, reaction.emoji, log)
     }))
     completion.sent = true
   })()
 
-  await U.all([sendingP, reactingP])
+  await U.all([sendingP, reactingP, dbReactionsP])
 
   log.I('Done responding')
 }
