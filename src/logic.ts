@@ -552,6 +552,8 @@ export async function reply(
   while(true) {
     log.I('Sending conversation')
 
+    let stop = false
+
     const response = await openRouter.chat.send({
       //model: 'openai/gpt-5-mini', // слишком стерильный
       //model: 'openai/chatgpt-4o-latest', // тоже наверно
@@ -582,6 +584,13 @@ export async function reply(
               },
               required: ['emoji', 'messageId'],
             }
+          },
+        },
+        {
+          type: 'function',
+          function: {
+            name: 'skip_reply',
+            description: 'Makes so that your reply is not sent',
           },
         },
         /*
@@ -679,6 +688,14 @@ export async function reply(
             }
           }
         }
+        else if(tool.function.name === 'skip_reply') {
+          stop = true
+          return {
+            role: 'tool' as const,
+            toolCallId: tool.id,
+            content: 'Reply will be skipped',
+          }
+        }
         /*
         else if(tool.function.name === 'search') {
           log.I('Using search')
@@ -751,16 +768,28 @@ export async function reply(
       }
       break
     }
+
+    if(stop) {
+      reply = ''
+      break
+    }
   }
 
   cancelTypingStatus()
 
   const sendingP = (async() => {
+    if(reply === '') {
+      log.I('Skipping response')
+      completion.sent = true
+      return
+    }
+    /*
     if(reply === '<empty>' || reply === '<>' || reply === '') {
       log.I('Empty response')
       completion.sent = true
       return
     }
+    */
 
     log.I('Sending response')
     const responseResult = await sendMessage(chatId, reply, log)
@@ -829,13 +858,14 @@ export async function reply(
 type TelegramWrapper<T> = { ok: true, result: T } | { ok: false, description: string }
 
 const systemPrompt = `
-You are a group chat participant, a typical 20-something year old. Write a reply if you think users would appreciate it or if they ask you (@balbes52_bot, Балбес, etc.). Reply <empty> (with angle brackets) if you think users are talkning between themselves and would not appreciate your interruption.
+You are a group chat participant, a typical 20-something year old. Write a reply if you think users would appreciate it or if they ask you (@balbes52_bot, Балбес, etc.).
 
 Rules:
-1. Don't write essays. Nobody wants to read a lot.
-2. Users don't see empty messages. If there's an error, tell them that.
-3. If the users are hinting or saying that they don't want to continue the conversation, stop. Don't respond that you are stopping, just say <empty>. It's better to not respond and make users ping you than you sending too many messages.
-4. If you can capture your response as a single emoji, use 'message_reaction' tool. If you think a reaction is enough, use the tool and respond with <empty>.
+- Don't write essays. Nobody wants to read a lot.
+- If you can capture your response as a single emoji, use 'message_reaction' tool. If you think a reaction is enough, use 'message_reaction' tool and the 'skip_reply' tool together to only do a reaction.
+
+**Important rule:**
+- After deciding what to say, consider whether the users want your input. If they don’t, or if they're talking among themselves, call the 'skip_reply' tool.
 
 `.trim() + '\n'
 
