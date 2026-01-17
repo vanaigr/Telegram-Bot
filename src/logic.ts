@@ -584,26 +584,40 @@ export async function reply(
         log.I('Tool call ', tool.function.name, ' with ', [args])
 
         if(tool.function.name === 'message_reaction') {
-          const { emoji, messageId: messageIdRaw } = args
-
-          openrouterMessages.push({
-            role: 'tool',
-            toolCallId: tool.id,
-            //name: tool.function.name,
-            content: 'done',
-          })
+          let { emoji, messageId: messageIdRaw } = args
 
           const messageId = parseInt(messageIdRaw)
           if(isFinite(messageId)) {
+            if(emoji === '😂') emoji = '🤣'
+
             if(validEmojis.includes(emoji)) {
               reactionsToSend.push({ emoji, messageId })
+              openrouterMessages.push({
+                role: 'tool',
+                toolCallId: tool.id,
+                content: 'done',
+              })
             }
             else {
-              reactionsToSend.push({ emoji: '❤', messageId })
+              log.W('Tried to output ', [emoji], ' but it is not allowed')
+              openrouterMessages.push({
+                role: 'tool',
+                toolCallId: tool.id,
+                //name: tool.function.name,
+                content: 'Error: pick one of ' + validEmojis.join(', '),
+              })
+              //reactionsToSend.push({ emoji: '❤', messageId })
             }
           }
           else {
             log.W('Malformed reaction: ', [JSON.parse(tool.function.arguments)])
+            // Don't bother it
+            openrouterMessages.push({
+              role: 'tool',
+              toolCallId: tool.id,
+              //name: tool.function.name,
+              content: 'done',
+            })
           }
         }
       }
