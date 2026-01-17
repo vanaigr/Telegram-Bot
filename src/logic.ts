@@ -582,8 +582,29 @@ export async function reply(
               },
               required: ['emoji', 'messageId'],
             }
-
           },
+        },
+        {
+          type: 'function',
+          function: {
+            name: 'search',
+            // Model said that this is the tool description. I don't trust it.
+            //Поиск информации в интернете. ИСПОЛЬЗУЙ ТОЛЬКО ЕСЛИ НУ ПРЯМ ВАЩЕ КРАЙ И БЕЗ НЕГО НИКАК.
+
+            description: 'Enables search. Use this only if asked by the user. In the output, mention that this is expensive.',
+            parameters: {
+              type: "object",
+              properties: {
+                queries: {
+                  type: "array",
+                  items: {
+                    type: "string",
+                  },
+                },
+              },
+              required: ["queries"],
+            }
+          }
         }
       ],
       stream: false,
@@ -610,7 +631,7 @@ export async function reply(
     if(finishReason === 'tool_calls') {
       openrouterMessages.push(response.choices[0].message)
 
-      for(const tool of response.choices[0].message.toolCalls!) {
+      const results = await Promise.all(response.choices[0].message.toolCalls!.map(async(tool) => {
         const args = JSON.parse(tool.function.arguments)
         log.I('Tool call ', tool.function.name, ' with ', [args])
 
@@ -623,35 +644,96 @@ export async function reply(
 
             if(validEmojis.includes(emoji)) {
               reactionsToSend.push({ emoji, messageId })
-              openrouterMessages.push({
-                role: 'tool',
+              return {
+                role: 'tool' as const,
                 toolCallId: tool.id,
                 content: 'done',
-              })
+              }
             }
             else {
               log.W('Tried to output ', [emoji], ' but it is not allowed')
-              openrouterMessages.push({
-                role: 'tool',
+              return {
+                role: 'tool' as const,
                 toolCallId: tool.id,
-                //name: tool.function.name,
                 content: 'Error: pick one of ' + validEmojis.join(', '),
-              })
-              //reactionsToSend.push({ emoji: '❤', messageId })
+              }
             }
           }
           else {
             log.W('Malformed reaction: ', [JSON.parse(tool.function.arguments)])
             // Don't bother it
-            openrouterMessages.push({
-              role: 'tool',
+            return {
+              role: 'tool' as const,
               toolCallId: tool.id,
-              //name: tool.function.name,
               content: 'done',
-            })
+            }
           }
         }
-      }
+        else if(tool.function.name === 'search') {
+          log.I('Using search')
+
+          try {
+            const searchResult = await openRouter.chat.send({
+              model: 'openai/gpt-oss-20b:free',
+              reasoning: {
+                effort: 'low',
+              },
+              provider: {
+                dataCollection: 'allow',
+              },
+              plugins: [{
+                id: 'web',
+                engine: 'exa',
+                enabled: true,
+                maxResults: 1,
+                searchPrompt: '',
+              }],
+              messages: [
+                { role: 'system', content: searchPrompt },
+                { role: 'user', content: tool.function.arguments }
+              ],
+            })
+            log.I('Search done')
+
+            await Db.insertMany(
+              conn,
+              Db.t.responses,
+              Db.omit(Db.d.responses, ['sequenceNumber']),
+              [{
+                respondsToChatId: chatId,
+                respondsToMessageId: messages.at(-1)!.msg.message_id,
+                raw: JSON.stringify(searchResult),
+              }],
+              {}
+            )
+
+            return {
+              role: 'tool' as const,
+              toolCallId: tool.id,
+              content: searchResult.choices[0].message.content?.toString() ?? '??',
+            }
+          }
+          catch(error) {
+            log.E('Search failed ', [error])
+
+            return {
+              role: 'tool' as const,
+              toolCallId: tool.id,
+              content: 'Error: search failed',
+            }
+          }
+        }
+        else {
+          log.W('Unknown tool ', [tool])
+          return {
+            role: 'tool' as const,
+            toolCallId: tool.id,
+            content: 'Error: unknown tool',
+          }
+        }
+      }))
+
+      for(const result of results) openrouterMessages.push(result)
     }
     else if(finishReason === 'stop') {
       const content = response.choices[0].message.content
@@ -750,6 +832,10 @@ Rules:
 3. If the users are hinting or saying that they don't want to continue the conversation, stop. Don't respond that you are stopping, just say <empty>. It's better to not respond and make users ping you than you sending too many messages.
 4. If you can capture your response as a single emoji, use 'message_reaction' tool. If you think a reaction is enough, use the tool and respond with <empty>.
 
+`.trim() + '\n'
+
+const searchPrompt = `
+Use search tool. Use the json below as input. Repeat the tool output as-is.
 `.trim() + '\n'
 
 /// ???????????

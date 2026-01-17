@@ -6,9 +6,11 @@ import * as L from './lib/log.ts'
 import * as U from './lib/util.ts'
 import type * as Types from './types.ts'
 import * as Logic from './logic.ts'
+import { OpenRouter } from '@openrouter/sdk'
 
 const log = L.makeLogger(undefined, undefined)
 
+/*
 const pool = DbClient.create(log)
 if(!pool) throw new Error()
 
@@ -59,3 +61,4 @@ const o = messages.map(({ msg, reactions }) => {
 })
 
 console.log(util.inspect(o, { maxArrayLength: Infinity, depth: Infinity }))
+*/
