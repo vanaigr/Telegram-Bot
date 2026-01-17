@@ -23,8 +23,10 @@ export async function POST(req: Request) {
   }
 
   const body = await req.json()
+
   //log.I('Body: ', [body])
-  const message = body.message
+  const message: Types.Message | undefined = body.message ?? body.edited_message
+  const edit = body.edited_message !== undefined
   if(message === undefined) {
     log.I('What did it send to me? ', [body])
     return new Response('')
@@ -67,12 +69,28 @@ export async function POST(req: Request) {
       type: 'user',
       raw: JSON.stringify(message),
     }
+    const excluded = Db.makeTable<typeof schema>('excluded')
+
+    if(edit) {
+      log.I('Backing up previous message')
+      const backupDst = Db.t.messagesBackup
+      const backupSchema = Db.omit(Db.d.messagesBackup, ['sequenceNumber'])
+      const backupCols = Db.keys(backupSchema)
+      await Db.queryRaw(db,
+        'insert into', backupDst, Db.args(backupCols.map(it => backupDst[it].nameOnly)),
+        'select', Db.list(backupCols.map(it => dst[it])),
+        'from', dst,
+        'where', Db.eq(dst.chatId, Db.param(BigInt(message.chat.id))),
+        'and', Db.eq(dst.messageId, Db.param(BigInt(message.message_id))),
+      )
+    }
 
     await Db.queryRaw(db,
       'insert into', dst, Db.args(cols.map(it => dst[it].nameOnly)),
       'select', Db.list(cols.map(it => src[it])),
       'from', Db.arraysTable([record], schema), 'as', src,
-      'on conflict', Db.args([dst.chatId.nameOnly, dst.messageId.nameOnly]), 'do nothing',
+      'on conflict', Db.args([dst.chatId.nameOnly, dst.messageId.nameOnly]),
+      'do update set', Db.list(cols.map(it => [dst[it].nameOnly, '=', excluded[it]])),
     )
   })
   log.I('Added message')
@@ -92,32 +110,34 @@ export async function POST(req: Request) {
   })()
   waitUntil(photoTask)
 
-  const replyTask = (async() => {
-    const l = log.addedCtx('reply')
+  if(!edit) {
+    const replyTask = (async() => {
+      const l = log.addedCtx('reply')
 
-    const completion = { sent: false }
-    try {
-      await Db.tran(pool, async(db) => {
-        await reply(
-          db,
-          l,
-          fromMessageDate(message.date),
-          message.chat.id,
-          completion
-        )
-      })
-    }
-    catch(error) {
-      l.E([error])
-      if(!completion.sent) {
-        const emojis = ['🙂', '💀', '☠']
-        const text = 'Бот шандарахнулся ' + emojis[Math.floor(Math.random() * emojis.length)]
-        await sendMessage(message.chat.id, text, log)
+      const completion = { sent: false }
+      try {
+        await Db.tran(pool, async(db) => {
+          await reply(
+            db,
+            l,
+            fromMessageDate(message.date),
+            message.chat.id,
+            completion
+          )
+        })
       }
-    }
-    // not returning db since it doesn't mater + its state is changed
-  })()
-  waitUntil(replyTask)
+      catch(error) {
+        l.E([error])
+        if(!completion.sent) {
+          const emojis = ['🙂', '💀', '☠']
+          const text = 'Бот шандарахнулся ' + emojis[Math.floor(Math.random() * emojis.length)]
+          await sendMessage(message.chat.id, text, log)
+        }
+      }
+      // not returning db since it doesn't mater + its state is changed
+    })()
+    waitUntil(replyTask)
+  }
 
   return new Response(JSON.stringify({}))
 }
@@ -583,13 +603,21 @@ function messageToText(msg: Types.Message) {
   text += '\n'
 
   text += 'At: '
-  text += T.Instant.fromEpochMilliseconds(msg.date * 1000)
-  .toZonedDateTimeISO('Europe/Moscow')
-  .toPlainDateTime().toString()
+  text += dateToString(fromMessageDate(msg.date))
   text += '\n'
+
+  if(msg.edit_date !== undefined) {
+    text += 'Edited at: '
+    text += dateToString(fromMessageDate(msg.edit_date))
+    text += '\n'
+  }
 
   text += (msg.text ?? msg.caption ?? '<no message>').trim()
   text += '\n'
 
   return text
+}
+
+function dateToString(date: T.Instant) {
+  return date.toZonedDateTimeISO('Europe/Moscow').toPlainDateTime().toString()
 }

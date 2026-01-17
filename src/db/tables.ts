@@ -80,6 +80,14 @@ export const tables = {
         "type": t_messageType,
         "raw": t_json,
     },
+    "messagesBackup": {
+        "sequenceNumber": t_integer,
+        "chatId": t_bigint,
+        "messageId": t_bigint,
+        "date": t_timestamp,
+        "type": t_messageType,
+        "raw": t_json,
+    },
     "responses": {
         "sequenceNumber": t_integer,
         "raw": t_json,

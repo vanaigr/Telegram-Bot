@@ -23,6 +23,17 @@ model messages {
     @@id([chatId, messageId])
 }
 
+model messagesBackup {
+    sequenceNumber Int @id @default(autoincrement())
+
+    chatId BigInt
+    messageId BigInt
+
+    date DateTime @db.Timestamp(6)
+    type messageType
+    raw Json
+}
+
 model responses {
     sequenceNumber Int @id @default(autoincrement())
     raw Json
