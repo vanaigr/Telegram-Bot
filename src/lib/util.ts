@@ -18,6 +18,7 @@ export function envVarValid(value: string | undefined): value is string {
 type RequestParam = Omit<RequestInit, 'signal' | 'log' | 'url'> & { url: URL; log: L.Log };
 export async function request<R = unknown>({ url, log, ...options }: RequestParam) {
   try {
+    log.I('Fetching ', [url.toString()])
     const resp = await fetch(url, { ...options });
     if (!resp.ok) {
       const bodyMessage: L.Message = await resp.text().then(

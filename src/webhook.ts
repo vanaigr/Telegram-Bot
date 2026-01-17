@@ -325,6 +325,8 @@ async function reply(
   log.I('Answering message ', [firstLatest.messageId])
   // Now we know that there is something to reply to.
 
+  const cancelTypingStatus = startTypingTask(chatId, log)
+
   // Postpone responding for 10 seconds if some attachments are loading.
   // If newer messages arrive, we may not send their images, but we don't
   // want the bot to get stuck forever if there's an active discussion.
@@ -500,6 +502,8 @@ async function reply(
   })
   log.I('Responded')
 
+  cancelTypingStatus()
+
   const saveP = Db.insertMany(
     conn,
     Db.t.responses,
@@ -586,6 +590,19 @@ async function sendMessage(chatId: number, text: string, log: L.Log) {
   })
 }
 
+async function sendChatAction(chatId: number, log: L.Log) {
+  return await U.request<TelegramWrapper<{}>>({
+    url: new URL(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN!}/sendChatAction`),
+    log: log.addedCtx('sendChatAction'),
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      action: 'typing',
+    }),
+  })
+}
+
 function fromMessageDate(messageDate: number) {
   return T.Instant.fromEpochMilliseconds(messageDate * 1000)
 }
@@ -620,4 +637,29 @@ function messageToText(msg: Types.Message) {
 
 function dateToString(date: T.Instant) {
   return date.toZonedDateTimeISO('Europe/Moscow').toPlainDateTime().toString()
+}
+
+function startTypingTask(chatId: number, log: L.Log) {
+  let timeoutId: NodeJS.Timeout
+
+  async function send() {
+    const result = await sendChatAction(chatId, log)
+    if(result.status !== 'ok') return
+    if(!result.data.ok) {
+      log.I('Typing status failed: ', result.data.description)
+    }
+  }
+
+  function recursiveSend() {
+    timeoutId = setTimeout(() => {
+      send()
+      recursiveSend()
+    }, 4000)
+  }
+  send()
+  recursiveSend()
+
+  return () => {
+    clearTimeout(timeoutId)
+  }
 }
