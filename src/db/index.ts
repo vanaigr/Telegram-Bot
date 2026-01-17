@@ -41,7 +41,13 @@ export function queryRawFull(prisma: DbConnOrPool, ...fragments: Q.SqlPart[]) {
 }
 export function queryRaw<O = unknown>(prisma: DbConnOrPool, ...fragments: Q.SqlPart[]) {
   const sql = toSql(fragments);
-  return prisma.query(sql.query, sql.args).then((it) => it.rows) as Promise<O>;
+  try {
+    return prisma.query(sql.query, sql.args).then((it) => it.rows) as Promise<O>;
+  }
+  catch(error) {
+    console.error('Failing query:', sql)
+    throw error
+  }
 }
 export function query<Cs extends readonly Q.ScalarExprDefinition<string, Q.AnyDbTypeInfo>[]>(
   prisma: DbConnOrPool,
