@@ -51,6 +51,12 @@ model responses {
     respondsToMessageId BigInt
 }
 
+model chatFullInfo {
+    id BigInt @id
+    updatedAt DateTime @db.Timestamp(6)
+    raw Json
+}
+
 enum downloadStatus {
     downloading
     error
@@ -76,6 +82,7 @@ model chatLocks {
     id BigInt @id
 }
 
+// separate from chats since how will you add a chat otherwise?
 model chatWhitelist {
     id BigInt @id
 }

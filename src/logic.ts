@@ -10,6 +10,79 @@ import * as L from './lib/log.ts'
 import * as U from './lib/util.ts'
 import type * as Types from './types.ts'
 
+export async function getChatFullInfo(
+  conn: Db.DbConnOrPool,
+  baseLog: L.Log,
+  chatId: number
+): Promise<Types.ChatFullInfo | undefined> {
+  const log = baseLog.addedCtx('chat full info')
+
+  try {
+    log.I('Getting chat info')
+    const t = Db.t.chatFullInfo
+    const chatData = await Db.query(conn,
+      'select', [t.updatedAt, t.raw],
+      'from', t,
+      'where', Db.eq(t.id, Db.param(BigInt(chatId))),
+    ).then(it => it.at(0))
+
+    if(chatData === undefined) {
+      log.I('No chat data')
+      return await updateFullChat(conn, log, chatId)
+    }
+    else {
+      log.I('Got chat data')
+      const nextUpdate = T.Instant.from(chatData.updatedAt).add({ minutes: 10 })
+      if(T.Instant.compare(nextUpdate, T.Now.instant()) < 0) {
+        log.I('Refreshing chat info')
+        waitUntil(updateFullChat(conn, log, chatId))
+      }
+      return chatData.raw
+    }
+  }
+  catch(error) {
+    log.E([error])
+  }
+
+  log.I('Could not get info')
+}
+
+async function updateFullChat(conn: Db.DbConnOrPool, log: L.Log, chatId: number) {
+  log.I('Fetching chat info')
+  const newChatInfo = await getChat(chatId, log)
+  if(!newChatInfo) return
+  log.I('Received')
+
+  const dst = Db.t.chatFullInfo
+  const schema = Db.d.chatFullInfo
+  const cols = Db.keys(schema)
+  const src = Db.makeTable<typeof schema>('src')
+  const excluded = Db.makeTable<typeof schema>('excluded')
+
+  const row: Db.ForInput<typeof schema> = {
+    id: chatId,
+    updatedAt: T.Now.instant().toJSON(),
+    raw: JSON.stringify(newChatInfo)
+  }
+
+  // NOTE: there may be race conditions, but it doesn't matter since
+  // this doesn't update often.
+  const result = await Db.query(conn, [
+    'insert into', dst, Db.args(cols.map(it => dst[it].nameOnly)),
+    'select', Db.list(cols.map(it => src[it])),
+    'from', Db.arraysTable([row], schema), 'as', src,
+    'where', Db.eq(dst.id, src.id),
+    'on conflict', Db.args([dst.id.nameOnly]),
+    'do update set', Db.list([
+      Db.set(dst.updatedAt, excluded.updatedAt),
+      [dst.raw.nameOnly, '=', excluded.raw],
+    ]),
+    'returning'], [dst.raw],
+  ).then(it => it[0].raw)
+  log.I('Updated db')
+  return result
+}
+
 export async function updateReactionRows(
   conn: Db.DbConnOrPool,
   reactions: Db.ForInput<typeof Db.d.reactions>[],
@@ -138,6 +211,8 @@ export async function reply(
   chatId: number,
   completion: { sent: boolean },
 ) {
+  const chatInfoP = getChatFullInfo(conn, log, chatId)
+
   log.I('Locking ', [chatId])
   try {
     const maxWait = messageDate.add({ seconds: 20 })
@@ -335,34 +410,52 @@ export async function reply(
     }
   }
 
-  const openrouterMessages = await Promise.all(messages.map(async({ msg, photos, reactions }): Promise<OpenRouterMessage> => {
+  const openrouterMessages: OpenRouterMessage[] = []
+
+  const chatInfo = await chatInfoP
+  if(chatInfo) {
+    openrouterMessages.push({
+      role: 'user',
+      content: JSON.stringify({
+        chatTitle: chatInfo.title ?? null,
+        chatDescription: chatInfo.description ?? null,
+        users: chatInfo.active_usernames.map(it => '@' + it),
+      }),
+    })
+  }
+
+  for(const { msg, photos, reactions } of messages) {
     if(msg.from?.username === 'balbes52_bot') {
-      return {
+      openrouterMessages.push({
         role: 'assistant',
         content: msg.text,
-      }
+      })
+      continue
     }
     else if(msg.new_chat_title !== undefined) {
-      return {
+      openrouterMessages.push({
         role: 'user',
         content: JSON.stringify({ newChatTitle: msg.new_chat_title }),
-      }
+      })
+      continue
     }
     else if(msg.new_chat_members !== undefined) {
-      return {
+      openrouterMessages.push({
         role: 'user',
         content: JSON.stringify({
           newChatMembers: msg.new_chat_members.map(it => userToString(it)),
         }),
-      }
+      })
+      continue
     }
     else if(msg.left_chat_member !== undefined) {
-      return {
+      openrouterMessages.push({
         role: 'user',
         content: JSON.stringify({
           leftChatMember: userToString(msg.left_chat_member),
         }),
-      }
+      })
+      continue
     }
 
     let text = ''
@@ -420,7 +513,7 @@ export async function reply(
         })(),
       ]
     }
-  }))
+  }
 
   let reply: string | undefined
   let reactionsToSend: { emoji: string, messageId: number }[] = []
@@ -673,6 +766,27 @@ async function setMessageReaction(chatId: number, messageId: number, emoji: stri
     return false
   }
   return true
+}
+
+async function getChat(chatId: number, log: L.Log) {
+  const l = log.addedCtx('getChat(', [chatId], ')')
+
+  const result = await U.request<TelegramWrapper<Types.ChatFullInfo>>({
+    url: new URL(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN!}/getChat`),
+    log: log.addedCtx('sendChatAction'),
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      action: 'typing',
+    }),
+  })
+  if(result.status !== 'ok') return undefined
+  if(!result.data.ok) {
+    l.E('Response error: ', [result.data.description])
+    return undefined
+  }
+  return result.data.result
 }
 
 export function fromMessageDate(messageDate: number) {

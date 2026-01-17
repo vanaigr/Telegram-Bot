@@ -100,6 +100,11 @@ export const tables = {
         "respondsToChatId": t_bigint,
         "respondsToMessageId": t_bigint,
     },
+    "chatFullInfo": {
+        "id": t_bigint,
+        "updatedAt": t_timestamp,
+        "raw": t_json,
+    },
     "photos": {
         "chatId": t_bigint,
         "fileUniqueId": t_text,

@@ -54,3 +54,9 @@ export type MessageReactionUpdated = {
 export type ReactionType = { type: 'emoji', emoji: string }
   | { type: 'custom_emoji', custom_emoji_id: string }
   | { type: 'paid' }
+
+export type ChatFullInfo = {
+  title?: string
+  description?: string
+  active_usernames: string[]
+}

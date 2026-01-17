@@ -17,6 +17,10 @@ const modifiedSchema = {
     ...Schema.tables.reactions,
     raw: Schema.makeDbType<string, Types.MessageReactionUpdated>('json'),
   },
+  chatFullInfo: {
+    ...Schema.tables.chatFullInfo,
+    raw: Schema.makeDbType<string, Types.ChatFullInfo>('json'),
+  },
 }
 
 export const dbTypes = Schema.dbTypes;
