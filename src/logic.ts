@@ -419,7 +419,7 @@ export async function reply(
       content: JSON.stringify({
         chatTitle: chatInfo.title ?? null,
         chatDescription: chatInfo.description ?? null,
-        users: chatInfo.active_usernames.map(it => '@' + it),
+        users: chatInfo.active_usernames?.map(it => '@' + it),
       }),
     })
   }

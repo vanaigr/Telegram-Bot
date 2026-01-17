@@ -58,5 +58,5 @@ export type ReactionType = { type: 'emoji', emoji: string }
 export type ChatFullInfo = {
   title?: string
   description?: string
-  active_usernames: string[]
+  active_usernames?: string[]
 }
