@@ -35,19 +35,18 @@ export type DbTransaction = PoolClient;
 export type DbPool = Pool;
 export type DbConnOrPool = DbTransaction | DbPool;
 
-export function queryRawFull(prisma: DbConnOrPool, ...fragments: Q.SqlPart[]) {
-  const sql = toSql(fragments);
-  return prisma.query(sql.query, sql.args);
-}
-export function queryRaw<O = unknown>(prisma: DbConnOrPool, ...fragments: Q.SqlPart[]) {
+export async function queryRawFull(prisma: DbConnOrPool, ...fragments: Q.SqlPart[]) {
   const sql = toSql(fragments);
   try {
-    return prisma.query(sql.query, sql.args).then((it) => it.rows) as Promise<O>;
+    return await prisma.query(sql.query, sql.args);
   }
   catch(error) {
     console.error('Failing query:', sql)
     throw error
   }
+}
+export async function queryRaw<O = unknown>(prisma: DbConnOrPool, ...fragments: Q.SqlPart[]) {
+  return queryRawFull(prisma, ...fragments).then((it) => it.rows as O);
 }
 export function query<Cs extends readonly Q.ScalarExprDefinition<string, Q.AnyDbTypeInfo>[]>(
   prisma: DbConnOrPool,

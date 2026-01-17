@@ -71,7 +71,6 @@ async function updateFullChat(conn: Db.DbConnOrPool, log: L.Log, chatId: number)
     'insert into', dst, Db.args(cols.map(it => dst[it].nameOnly)),
     'select', Db.list(cols.map(it => src[it])),
     'from', Db.arraysTable([row], schema), 'as', src,
-    'where', Db.eq(dst.id, src.id),
     'on conflict', Db.args([dst.id.nameOnly]),
     'do update set', Db.list([
       Db.set(dst.updatedAt, excluded.updatedAt),
