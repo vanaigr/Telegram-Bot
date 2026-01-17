@@ -416,13 +416,13 @@ async function reply(
       }
     }
 
-    const text = 'From: ' + (msg.from?.first_name + ' ' + msg.from?.last_name).trim() + '(@' + msg.from?.username + ')\n'
-      + 'At: '
-      + T.Instant.fromEpochMilliseconds(msg.date * 1000)
-        .toZonedDateTimeISO(T.Now.timeZoneId())
-        .toPlainDateTime().toString()
-      + '\n'
-      + 'Text: ' + (msg.text ?? msg.caption ?? '<no message>')
+    let text = ''
+    if(msg.reply_to_message) {
+      const reply = messageToText(msg.reply_to_message)
+      text += reply.trim().split('\n').map(it => '> ' + it).join('\n')
+      text += '\n'
+    }
+    text += messageToText(msg)
 
     return {
       role: 'user',
@@ -437,7 +437,7 @@ async function reply(
                 type: 'image_url' as const,
                 imageUrl: {
                   url: dataUrl,
-                  detail: 'high' as const,
+                  detail: 'auto' as const,
                 },
               }
             }
@@ -541,7 +541,7 @@ Don't write essays. Nobody wants to read a lot.
 Users don't see empty messages. If there's an error, tell them that.
 If the users are hinting or saying that they don't want to continue the conversation, stop. Don't respond that you are stopping, just say <empty>. It's better to not respond and make users ping you than you sending too many messages.
 
-`.trim()
+`.trim() + '\n'
 
 /// ???????????
 type OpenRouterMessage = OpenRouter['chat']['send'] extends (a: { messages: Array<infer Message> }) => infer U1 ? Message : never
@@ -568,4 +568,28 @@ async function sendMessage(chatId: number, text: string, log: L.Log) {
 
 function fromMessageDate(messageDate: number) {
   return T.Instant.fromEpochMilliseconds(messageDate * 1000)
+}
+
+function messageToText(msg: Types.Message) {
+  let text = ''
+  if(msg.from) {
+    const fullName = msg.from.first_name + ' ' + (msg.from.last_name ?? '')
+    text += 'From: ' + fullName.trim()
+    text += ' (@' + msg.from.username + ')'
+  }
+  else {
+    text += 'From: chat'
+  }
+  text += '\n'
+
+  text += 'At: '
+  text += T.Instant.fromEpochMilliseconds(msg.date * 1000)
+  .toZonedDateTimeISO('Europe/Moscow')
+  .toPlainDateTime().toString()
+  text += '\n'
+
+  text += (msg.text ?? msg.caption ?? '<no message>').trim()
+  text += '\n'
+
+  return text
 }

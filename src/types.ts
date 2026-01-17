@@ -12,6 +12,7 @@ export type Message = {
   text?: string
   caption?: string
   photo?: PhotoSize[]
+  reply_to_message?: Message
   date: number
 }
 
