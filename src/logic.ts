@@ -584,6 +584,15 @@ export async function reply(
             }
           },
         },
+        /*
+
+        Whatever openrouter does for the search plugin does not work
+        if I enable it after tool calls. The tool is available, but it doesn't
+        intercept it, and I receive the tool. Even though it bills as if it
+        did web search.
+
+        I tried wrapping the search in a second model, but all the free ones are bad.
+
         {
           type: 'function',
           function: {
@@ -606,6 +615,7 @@ export async function reply(
             }
           }
         }
+        */
       ],
       stream: false,
       messages: [
@@ -669,23 +679,17 @@ export async function reply(
             }
           }
         }
+        /*
         else if(tool.function.name === 'search') {
           log.I('Using search')
 
           try {
             const searchResult = await openRouter.chat.send({
-              model: 'openai/gpt-oss-20b:free',
-              reasoning: {
-                effort: 'low',
-              },
-              provider: {
-                dataCollection: 'allow',
-              },
+              model: 'nvidia/nemotron-3-nano-30b-a3b:free',
               plugins: [{
                 id: 'web',
-                engine: 'exa',
                 enabled: true,
-                maxResults: 1,
+                maxResults: 3,
                 searchPrompt: '',
               }],
               messages: [
@@ -723,6 +727,7 @@ export async function reply(
             }
           }
         }
+        */
         else {
           log.W('Unknown tool ', [tool])
           return {
@@ -832,10 +837,6 @@ Rules:
 3. If the users are hinting or saying that they don't want to continue the conversation, stop. Don't respond that you are stopping, just say <empty>. It's better to not respond and make users ping you than you sending too many messages.
 4. If you can capture your response as a single emoji, use 'message_reaction' tool. If you think a reaction is enough, use the tool and respond with <empty>.
 
-`.trim() + '\n'
-
-const searchPrompt = `
-Use search tool. Use the json below as input. Repeat the tool output as-is.
 `.trim() + '\n'
 
 /// ???????????

@@ -62,3 +62,23 @@ const o = messages.map(({ msg, reactions }) => {
 
 console.log(util.inspect(o, { maxArrayLength: Infinity, depth: Infinity }))
 */
+
+const searchPrompt = `
+Use search tool. Use the json below as input. Output the tool result. Do not alter its content. Reproduce exactly.
+`.trim() + '\n'
+
+const openRouter = new OpenRouter({ apiKey: process.env.OPENROUTER_KEY! });
+const searchResult = await openRouter.chat.send({
+  model: 'mistralai/mistral-small-3.1-24b-instruct:free',
+  plugins: [{
+    id: 'web',
+    enabled: true,
+    maxResults: 2,
+    searchPrompt: '',
+  }],
+  messages: [
+    { role: 'system', content: searchPrompt },
+    { role: 'user', content: "{\"queries\":[\"current senate numbers democrats vs republicans 2026\",\"who has majority in senate 2026\"]}" }
+  ],
+})
+console.log(util.inspect(searchResult, { depth: Infinity, maxArrayLength: Infinity }))
