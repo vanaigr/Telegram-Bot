@@ -1,4 +1,4 @@
-A Telegram bot that spices up group chats with fun, witty replies. It can read conversation history, see image attachments and add reactions.
+A Telegram bot that spices up group chats with fun, witty replies. It can read conversation history, see image attachments, add reactions and even do search.
 
 The bot uses OpenRouter to generate responses and is deployed on Vercel (serverless functions) + Prisma (postgres).
 
@@ -57,6 +57,6 @@ After these steps, the bot should be working
 ## Misc
 
 1. Bot cannot see messages before it was added.
-2. I've seen requests costing up to $0.01.
+2. Message - $0.01, search adds $0.02.
 3. Theoretically doesn't use your conversations for prompt training.
 4. Stores all conversations and attachments in the db, you may run out of the 500mb eventually. Just delete old images I guess.
