@@ -25,7 +25,7 @@ export async function POST(req: Request): Promise<Response> {
     return await handleMessage(log, body.message, false)
   }
   else if(body.edited_message !== undefined) {
-    return await handleMessage(log, body.message, true)
+    return await handleMessage(log, body.edited_message, true)
   }
   else if(body.message_reaction !== undefined) {
     return await handleReaction(log, body.message_reaction)
