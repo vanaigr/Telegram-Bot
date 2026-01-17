@@ -515,6 +515,33 @@ export async function reply(
     })
   }
 
+  ;(() => {
+    for(let j = openrouterMessages.length - 1; j > -1; j--) {
+      const message = openrouterMessages[j]
+      if(typeof message.content === 'string') {
+        message.content = [{
+          type: 'text',
+          text: message.content,
+          cacheControl: { type: 'ephemeral' },
+        }]
+        log.I('Inserted cache')
+        return
+      }
+      else if(Array.isArray(message.content)) {
+        for(let k = message.content.length - 1; k > -1; k--) {
+          const piece = message.content[k]
+          if(piece.type === 'text') {
+            piece.cacheControl = { type: 'ephemeral' }
+            log.I('Inserted cache')
+            return
+          }
+        }
+      }
+    }
+
+    log.I('No cache')
+  })()
+
   let reply: string | undefined
   let reactionsToSend: { emoji: string, messageId: number }[] = []
   const openRouter = new OpenRouter({ apiKey: process.env.OPENROUTER_KEY! });
