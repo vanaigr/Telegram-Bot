@@ -211,7 +211,7 @@ export async function reply(
   chatId: number,
   completion: { sent: boolean },
 ) {
-  const chatInfoP = getChatFullInfo(conn, log, chatId)
+  const chatInfoP = getChatFullInfo(pool, log, chatId)
 
   log.I('Locking ', [chatId])
   try {
@@ -468,7 +468,7 @@ export async function reply(
     }
     text += messageText(msg) + '\n'
 
-    return {
+    openrouterMessages.push({
       role: 'user',
       content: [
         { type: 'text', text },
@@ -512,7 +512,7 @@ export async function reply(
           }]
         })(),
       ]
-    }
+    })
   }
 
   let reply: string | undefined
