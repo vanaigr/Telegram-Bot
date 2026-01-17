@@ -219,6 +219,7 @@ export async function reply(
     const waitFor = Math.floor(maxWait.since(T.Now.instant()).total('milliseconds'))
     if(waitFor <= 10) {
       log.E('Not sending message - timed out 1')
+      completion.sent = true
       return
     }
 
@@ -240,6 +241,7 @@ export async function reply(
   }
   catch(error) {
     log.E('Not sending message - could not aquire chat lock: ', [error])
+    completion.sent = true
     // If the lock is locked by someone else all this time, the message
     // is no longer relevant, so we can exit. Future messages are running
     // the same logic, so they will respond eventually (or be irrelevant)
@@ -286,6 +288,7 @@ export async function reply(
   }
   if(firstLatest.hasResponse) {
     log.I('Latest message ', [firstLatest.messageId], ' is already answered')
+    completion.sent = true
     return
   }
   log.I('Answering message ', [firstLatest.messageId])
@@ -353,6 +356,7 @@ export async function reply(
   )
   if(messagesRaw.length === 0) {
     log.unreachable()
+    completion.sent = true
     return
   }
 
