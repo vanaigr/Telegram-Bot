@@ -10,6 +10,15 @@ import * as L from './lib/log.ts'
 import * as U from './lib/util.ts'
 import type * as Types from './types.ts'
 
+export async function getChatDataFromDb(conn: Db.DbConnOrPool, chatId: number) {
+  const t = Db.t.chatFullInfo
+  return await Db.query(conn,
+    'select', [t.updatedAt, t.raw],
+    'from', t,
+    'where', Db.eq(t.id, Db.param(BigInt(chatId))),
+  ).then(it => it.at(0))
+}
+
 export async function getChatFullInfo(
   conn: Db.DbConnOrPool,
   baseLog: L.Log,
@@ -19,12 +28,7 @@ export async function getChatFullInfo(
 
   try {
     log.I('Getting chat info')
-    const t = Db.t.chatFullInfo
-    const chatData = await Db.query(conn,
-      'select', [t.updatedAt, t.raw],
-      'from', t,
-      'where', Db.eq(t.id, Db.param(BigInt(chatId))),
-    ).then(it => it.at(0))
+    const chatData = await getChatDataFromDb(conn, chatId)
 
     if(chatData === undefined) {
       log.I('No chat data')
@@ -334,217 +338,11 @@ export async function reply(
     await U.delay(until)
   }
 
-  const t = Db.t.messages
-  const messagesRaw = await Db.query(conn,
-    'select', [
-      t.raw,
-      Db.named(
-        'reactions',
-        Db.scalar<typeof Db.dbTypes.jsonArray>(Db.par(
-          'select', Db.func('array_agg', [
-            Db.t.reactions.raw, 'order by', Db.t.reactions.hash,
-          ]),
-          'from', Db.t.reactions,
-          'where', Db.eq(Db.t.reactions.chatId, t.chatId),
-          'and', Db.eq(Db.t.reactions.messageId, t.messageId),
-        )),
-      ),
-    ],
-    'from', t,
-    'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
-    'order by', t.messageId, 'asc', // date resolution is too low
-  )
-  if(messagesRaw.length === 0) {
-    log.unreachable()
-    completion.sent = true
-    return
-  }
-
-  const messages = messagesRaw.map(({ raw: msg, reactions }) => {
-    return {
-      msg,
-      reactions: reactions as Types.MessageReactionUpdated[],
-      photos: ((): Photo[] => {
-        const photo = msg.photo?.at(-1)
-        if(!photo) return []
-
-        return [
-          {
-            file_unique_id: photo.file_unique_id,
-            status: 'not-available',
-            data: Buffer.from([]),
-            info: photo,
-          }
-        ]
-      })()
-    }
-  })
-
-  {
-    // Insertion order is from latest to earliest.
-    const fileUniqueIds = new Set<string>()
-    for(let off = 0; off < Math.min(20, messages.length); off++) {
-      const { photos } = messages[messages.length - 1 - off]
-      for(let j = photos.length - 1; j > -1; j--) {
-        fileUniqueIds.add(photos[j].file_unique_id)
-      }
-    }
-
-    const t = Db.t.photos
-    const arrayP = Db.param([...fileUniqueIds])
-    const photoRows = await Db.query(conn,
-      'select', [t.status, t.bytes, t.fileUniqueId, t.raw],
-      'from', t,
-      'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
-      'and', t.fileUniqueId, '=', Db.func('any', arrayP),
-      'and', Db.eq(t.status, Db.param('done' as const)),
-      'order by', Db.func('array_position', arrayP, t.fileUniqueId),
-      'limit 5',
-    )
-    const photoRowsById = new Map(photoRows.map(it => [it.fileUniqueId, it]))
-
-    for(const message of messages) {
-      for(const photo of message.photos) {
-        const photoRow = photoRowsById.get(photo.file_unique_id)
-        if(photoRow !== undefined) {
-          photo.status = photoRow.status
-          photo.data = photoRow.bytes
-        }
-      }
-    }
-  }
-
-  const openrouterMessages: OpenRouterMessage[] = []
-
-  const chatInfo = await chatInfoP
-  if(chatInfo) {
-    openrouterMessages.push({
-      role: 'user',
-      content: JSON.stringify({
-        chatTitle: chatInfo.title ?? null,
-        chatDescription: chatInfo.description ?? null,
-        users: chatInfo.active_usernames?.map(it => '@' + it),
-      }),
-    })
-  }
-
-  for(const { msg, photos, reactions } of messages) {
-    if(msg.from?.username === 'balbes52_bot') {
-      openrouterMessages.push({
-        role: 'assistant',
-        content: msg.text,
-      })
-      continue
-    }
-    else if(msg.new_chat_title !== undefined) {
-      openrouterMessages.push({
-        role: 'user',
-        content: JSON.stringify({ newChatTitle: msg.new_chat_title }),
-      })
-      continue
-    }
-    else if(msg.new_chat_members !== undefined) {
-      openrouterMessages.push({
-        role: 'user',
-        content: JSON.stringify({
-          newChatMembers: msg.new_chat_members.map(it => userToString(it)),
-        }),
-      })
-      continue
-    }
-    else if(msg.left_chat_member !== undefined) {
-      openrouterMessages.push({
-        role: 'user',
-        content: JSON.stringify({
-          leftChatMember: userToString(msg.left_chat_member),
-        }),
-      })
-      continue
-    }
-
-    let text = ''
-    text += JSON.stringify(messageHeaders(msg, reactions)) + '\n'
-    if(msg.reply_to_message) {
-      text += '> ' + JSON.stringify(messageHeaders(msg.reply_to_message, undefined))
-      const replyText = messageText(msg.reply_to_message)
-      text += replyText.split('\n').map(it => '> ' + it).join('\n')
-      text += '\n'
-    }
-    text += messageText(msg) + '\n'
-
-    openrouterMessages.push({
-      role: 'user',
-      content: [
-        { type: 'text', text },
-        ...await Promise.all(photos.map(async(photo) => {
-          if(photo.status === 'done') {
-            const type = await new FileTypeParser().fromBuffer(photo.data)
-            if(type !== undefined) {
-              const dataUrl = `data:${type.mime};base64,${photo.data.toString("base64")}`;
-              return {
-                type: 'image_url' as const,
-                imageUrl: {
-                  url: dataUrl,
-                  detail: 'auto' as const,
-                },
-              }
-            }
-            else {
-              log.W('Could not detect file type for', photo.file_unique_id)
-            }
-          }
-
-          return {
-            type: 'text' as const,
-            text: '<image not available>',
-          }
-        })),
-        ...(() => {
-          const audio = msg.audio
-          if(audio === undefined) return []
-          return [{
-            type: 'text' as const,
-            text: '<audio not available>',
-          }]
-        })(),
-        ...(() => {
-          const video = msg.video
-          if(video === undefined) return []
-          return [{
-            type: 'text' as const,
-            text: '<video not available>',
-          }]
-        })(),
-      ]
-    })
-  }
-
-  ;(() => {
-    for(let j = openrouterMessages.length - 1; j > -1; j--) {
-      const message = openrouterMessages[j]
-      if(typeof message.content === 'string') {
-        message.content = [{
-          type: 'text',
-          text: message.content,
-          cacheControl: { type: 'ephemeral' },
-        }]
-        log.I('Inserted cache')
-        return
-      }
-      else if(Array.isArray(message.content)) {
-        for(let k = message.content.length - 1; k > -1; k--) {
-          const piece = message.content[k]
-          if(piece.type === 'text') {
-            piece.cacheControl = { type: 'ephemeral' }
-            log.I('Inserted cache')
-            return
-          }
-        }
-      }
-    }
-
-    log.I('No cache')
+  const messages = await(async() => {
+    const messages = await fetchMessages(conn, log, chatId)
+    return messages.slice(messages.length - 30)
   })()
+  const openrouterMessages: OpenRouterMessage[] = await messagesToModelInput(messages, await chatInfoP, log)
 
   let reply: string | undefined
   let reactionsToSend: { emoji: string, messageId: number }[] = []
@@ -554,84 +352,7 @@ export async function reply(
 
     let stop = false
 
-    const response = await openRouter.chat.send({
-      //model: 'openai/gpt-5-mini', // слишком стерильный
-      //model: 'openai/chatgpt-4o-latest', // тоже наверно
-      //model: 'x-ai/grok-4.1-fast', // not super coherent
-      //model: 'google/gemini-2.5-flash-lite',
-      model: 'google/gemini-3-flash-preview',
-      //model: 'moonshotai/kimi-k2-0905',
-      //model: 'moonshotai/kimi-k2-thinking',
-      //model: 'openai/gpt-oss-120b', // explodes
-      provider: {
-        dataCollection: 'deny',
-      },
-      reasoning: {
-        effort: 'medium',
-      },
-      tools: [
-        {
-          type: 'function',
-          function: {
-            name: 'message_reaction',
-            description: 'Adds an emoji reaction to a message',
-            //description: 'Adds an emoji reaction to a message. Valid emojis: ' + validEmojis.join(', '),
-            parameters: {
-              type: 'object',
-              properties: {
-                emoji: { type: 'string' },
-                messageId: { type: 'string' },
-              },
-              required: ['emoji', 'messageId'],
-            }
-          },
-        },
-        {
-          type: 'function',
-          function: {
-            name: 'skip_reply',
-            description: 'Makes so that your reply is not sent',
-          },
-        },
-        /*
-
-        Whatever openrouter does for the search plugin does not work
-        if I enable it after tool calls. The tool is available, but it doesn't
-        intercept it, and I receive the tool. Even though it bills as if it
-        did web search.
-
-        I tried wrapping the search in a second model, but all the free ones are bad.
-
-        {
-          type: 'function',
-          function: {
-            name: 'search',
-            // Model said that this is the tool description. I don't trust it.
-            //Поиск информации в интернете. ИСПОЛЬЗУЙ ТОЛЬКО ЕСЛИ НУ ПРЯМ ВАЩЕ КРАЙ И БЕЗ НЕГО НИКАК.
-
-            description: 'Enables search. Use this only if asked by the user. In the output, mention that this is expensive.',
-            parameters: {
-              type: "object",
-              properties: {
-                queries: {
-                  type: "array",
-                  items: {
-                    type: "string",
-                  },
-                },
-              },
-              required: ["queries"],
-            }
-          }
-        }
-        */
-      ],
-      stream: false,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        ...openrouterMessages,
-      ],
-    })
+    const response = await sendPrompt(openRouter, openrouterMessages, systemPrompt)
     log.I('Responded')
 
     await Db.insertMany(
@@ -857,7 +578,7 @@ export async function reply(
 
 type TelegramWrapper<T> = { ok: true, result: T } | { ok: false, description: string }
 
-const systemPrompt = `
+export const systemPrompt = `
 You are a group chat participant, a typical 20-something year old. Write a reply if you think users would appreciate it or if they ask you (@balbes52_bot, Балбес, etc.).
 
 Rules:
@@ -869,6 +590,91 @@ Rules:
 
 `.trim() + '\n'
 
+export async function sendPrompt(
+  openRouter: OpenRouter,
+  messages: OpenRouterMessage[],
+  systemPrompt: string,
+) {
+  return await openRouter.chat.send({
+    //model: 'openai/gpt-5-mini', // слишком стерильный
+    //model: 'openai/chatgpt-4o-latest', // тоже наверно
+    //model: 'x-ai/grok-4.1-fast', // not super coherent
+    //model: 'google/gemini-2.5-flash-lite',
+    model: 'google/gemini-3-flash-preview',
+    //model: 'moonshotai/kimi-k2-0905',
+    //model: 'moonshotai/kimi-k2-thinking',
+    //model: 'openai/gpt-oss-120b', // explodes
+    provider: {
+      dataCollection: 'deny',
+    },
+    reasoning: {
+      effort: 'medium',
+    },
+    tools: [
+      {
+        type: 'function',
+        function: {
+          name: 'message_reaction',
+          description: 'Adds an emoji reaction to a message',
+          //description: 'Adds an emoji reaction to a message. Valid emojis: ' + validEmojis.join(''),
+          parameters: {
+            type: 'object',
+            properties: {
+              emoji: { type: 'string' },
+              messageId: { type: 'string' },
+            },
+            required: ['emoji', 'messageId'],
+          }
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'skip_reply',
+          description: 'Makes so that your reply is not sent',
+        },
+      },
+      /*
+
+        Whatever openrouter does for the search plugin does not work
+        if I enable it after tool calls. The tool is available, but it doesn't
+        intercept it, and I receive the tool. Even though it bills as if it
+        did web search.
+
+        I tried wrapping the search in a second model, but all the free ones are bad.
+
+        {
+          type: 'function',
+          function: {
+            name: 'search',
+            // Model said that this is the tool description. I don't trust it.
+            //Поиск информации в интернете. ИСПОЛЬЗУЙ ТОЛЬКО ЕСЛИ НУ ПРЯМ ВАЩЕ КРАЙ И БЕЗ НЕГО НИКАК.
+
+            description: 'Enables search. Use this only if asked by the user. In the output, mention that this is expensive.',
+            parameters: {
+              type: "object",
+              properties: {
+                queries: {
+                  type: "array",
+                  items: {
+                    type: "string",
+                  },
+                },
+              },
+              required: ["queries"],
+            }
+          }
+        }
+        */
+    ],
+    stream: false,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      ...messages,
+    ],
+  })
+}
+
 /// ???????????
 type OpenRouterMessage = OpenRouter['chat']['send'] extends (a: { messages: Array<infer Message> }) => infer U1 ? Message : never
 
@@ -877,6 +683,281 @@ type Photo = {
   status: 'done' | 'downloading' | 'error' | 'not-available'
   data: Buffer
   info: Types.PhotoSize
+}
+
+type MessageWithAttachments = {
+  msg: Types.Message
+  reactions: Types.MessageReactionUpdated[]
+  photos: Photo[]
+}
+
+export async function fetchMessages(
+  conn: Db.DbTransaction,
+  log: L.Log,
+  chatId: number,
+  lastMessage?: number
+): Promise<MessageWithAttachments[]> {
+  const t = Db.t.messages
+  const messagesRaw = await Db.query(conn,
+    'select', [
+      t.raw,
+      Db.named(
+        'reactions',
+        Db.scalar<typeof Db.dbTypes.jsonArray>(Db.par(
+          'select', Db.func('array_agg', [
+            Db.t.reactions.raw, 'order by', Db.t.reactions.hash,
+          ]),
+          'from', Db.t.reactions,
+          'where', Db.eq(Db.t.reactions.chatId, t.chatId),
+          'and', Db.eq(Db.t.reactions.messageId, t.messageId),
+        )),
+      ),
+    ],
+    'from', t,
+    'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
+    ...(lastMessage !== undefined ? ['and', t.messageId, '<=', Db.param(lastMessage)] : []),
+    'order by', t.messageId, 'asc', // date resolution is too low
+  )
+  if(messagesRaw.length === 0) {
+    log.unreachable()
+    return []
+  }
+
+  const messages = messagesRaw.map(({ raw: msg, reactions }) => {
+    return {
+      msg,
+      reactions: reactions as Types.MessageReactionUpdated[],
+      photos: ((): Photo[] => {
+        const photo = msg.photo?.at(-1)
+        if(!photo) return []
+
+        return [
+          {
+            file_unique_id: photo.file_unique_id,
+            status: 'not-available',
+            data: Buffer.from([]),
+            info: photo,
+          }
+        ]
+      })()
+    }
+  })
+
+  {
+    // Insertion order is from latest to earliest.
+    const fileUniqueIds = new Set<string>()
+    for(let off = 0; off < Math.min(20, messages.length); off++) {
+      const { photos } = messages[messages.length - 1 - off]
+      for(let j = photos.length - 1; j > -1; j--) {
+        fileUniqueIds.add(photos[j].file_unique_id)
+      }
+    }
+
+    const t = Db.t.photos
+    const arrayP = Db.param([...fileUniqueIds])
+    const photoRows = await Db.query(conn,
+      'select', [t.status, t.bytes, t.fileUniqueId, t.raw],
+      'from', t,
+      'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
+      'and', t.fileUniqueId, '=', Db.func('any', arrayP),
+      'and', Db.eq(t.status, Db.param('done' as const)),
+      'order by', Db.func('array_position', arrayP, t.fileUniqueId),
+      'limit 5',
+    )
+    const photoRowsById = new Map(photoRows.map(it => [it.fileUniqueId, it]))
+
+    for(const message of messages) {
+      for(const photo of message.photos) {
+        const photoRow = photoRowsById.get(photo.file_unique_id)
+        if(photoRow !== undefined) {
+          photo.status = photoRow.status
+          photo.data = photoRow.bytes
+        }
+      }
+    }
+  }
+
+  return messages
+}
+
+type LlmMessage = {
+  role: 'user'
+  content: Array<
+    { type: 'text', text: string }
+      | { type: 'image_url', imageUrl: { url: string } }
+  >
+} | {
+  role: 'assistant'
+  content: string
+}
+
+export async function messagesToModelInput(
+  messages: MessageWithAttachments[],
+  chatInfo: Types.ChatFullInfo | undefined,
+  log: L.Log
+): Promise<LlmMessage[]> {
+  const openrouterMessages: LlmMessage[] = []
+
+  if(chatInfo) {
+    openrouterMessages.push({
+      role: 'user',
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          chatTitle: chatInfo.title ?? null,
+          chatDescription: chatInfo.description ?? null,
+          users: chatInfo.active_usernames?.map(it => '@' + it),
+        }),
+      }],
+    })
+  }
+
+  for(const { msg, photos, reactions } of messages) {
+    if(msg.from?.username === 'balbes52_bot') {
+      openrouterMessages.push({
+        role: 'assistant',
+        content: msg.text ?? '',
+      })
+      continue
+    }
+    else if(msg.new_chat_title !== undefined) {
+      openrouterMessages.push({
+        role: 'user',
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ newChatTitle: msg.new_chat_title }),
+        }],
+      })
+      continue
+    }
+    else if(msg.new_chat_members !== undefined) {
+      openrouterMessages.push({
+        role: 'user',
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            newChatMembers: msg.new_chat_members.map(it => userToString(it)),
+          }),
+        }],
+      })
+      continue
+    }
+    else if(msg.left_chat_member !== undefined) {
+      openrouterMessages.push({
+        role: 'user',
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            leftChatMember: userToString(msg.left_chat_member),
+          }),
+        }],
+      })
+      continue
+    }
+
+    let text = ''
+    text += JSON.stringify(messageHeaders(msg, reactions)) + '\n'
+    if(msg.reply_to_message) {
+      text += '> ' + JSON.stringify(messageHeaders(msg.reply_to_message, undefined)) + '\n'
+      const replyText = messageText(msg.reply_to_message)
+      text += replyText.split('\n').map(it => '> ' + it).join('\n')
+      text += '\n'
+    }
+    text += messageText(msg) + '\n'
+
+    openrouterMessages.push({
+      role: 'user',
+      content: [
+        { type: 'text', text },
+        ...await Promise.all(photos.map(async(photo) => {
+          if(photo.status === 'done') {
+            const type = await new FileTypeParser().fromBuffer(photo.data)
+            if(type !== undefined) {
+              const dataUrl = `data:${type.mime};base64,${photo.data.toString("base64")}`;
+              return {
+                type: 'image_url' as const,
+                imageUrl: {
+                  url: dataUrl,
+                  detail: 'auto' as const,
+                },
+              }
+            }
+            else {
+              log.W('Could not detect file type for', photo.file_unique_id)
+            }
+          }
+
+          return {
+            type: 'text' as const,
+            text: '<image not available>',
+          }
+        })),
+        ...(() => {
+          const audio = msg.audio
+          if(audio === undefined) return []
+          return [{
+            type: 'text' as const,
+            text: '<audio not available>',
+          }]
+        })(),
+        ...(() => {
+          const video = msg.video
+          if(video === undefined) return []
+          return [{
+            type: 'text' as const,
+            text: '<video not available>',
+          }]
+        })(),
+      ]
+    })
+  }
+
+  /*
+  const openrouterMessages2: LlmMessage[] = []
+  for(const message of openrouterMessages) {
+    const prev = openrouterMessages2.at(-1)
+    if(prev?.role === 'user' && message.role === 'user') {
+      for(const part of message.content) {
+        prev.content.push(part)
+      }
+    }
+    else {
+      openrouterMessages2.push(message)
+    }
+  }
+  *.
+
+  // Crashes openrouter
+  /*
+  ;(() => {
+    for(let j = openrouterMessages.length - 1; j > -1; j--) {
+      const message = openrouterMessages[j]
+      if(typeof message.content === 'string') {
+        message.content = [{
+          type: 'text',
+          text: message.content,
+          cacheControl: { type: 'ephemeral' },
+        }]
+        log.I('Inserted cache')
+        return
+      }
+      else if(Array.isArray(message.content)) {
+        for(let k = message.content.length - 1; k > -1; k--) {
+          const piece = message.content[k]
+          if(piece.type === 'text') {
+            piece.cacheControl = { type: 'ephemeral' }
+            log.I('Inserted cache')
+            return
+          }
+        }
+      }
+    }
+
+    log.I('No cache')
+  })()
+  */
+
+  return openrouterMessages
 }
 
 export async function sendMessage(chatId: number, text: string, log: L.Log) {
@@ -985,11 +1066,7 @@ export function messageHeaders(
         name = userToString(reaction.user)
       }
       else {
-        name = userToString({
-          id: -1,
-          username: "GroupAnonymousBot",
-          first_name: "Group"
-        })
+        name = userToString(adminUser)
       }
 
       reactionsObj[name] = result.join('')
@@ -1012,6 +1089,8 @@ export function messageText(msg: Types.Message) {
 }
 
 function userToString(user: Types.User) {
+  if(user.username === 'GroupAnonymousBot') return 'Admin'
+
   const fullName = user.first_name + ' ' + (user.last_name ?? '')
   return fullName.trim() + ' (@' + user.username + ')'
 }
