@@ -15,7 +15,8 @@ Requires node >= 24 (mine is `24.12.0`) and pnpm >= 10 (mine is `10.26.1`)
 
 1. Fork the repo to your GitHub account
 2. Clone the repo
-3. Run `pnpm install`
+3. Replace mentions of bot username with whatever name you plan to use for our telegram bot. Commit and push to GitHub
+4. Run `pnpm install`
 
 ### Vercel
 
