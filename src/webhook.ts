@@ -140,34 +140,41 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
   })()
   waitUntil(photoTask)
 
-  if(!edit) {
-    const replyTask = (async() => {
-      const l = log.addedCtx('reply')
+  const botEnabled = process.env.BOT_ENABLED === 'true' || process.env.BOT_ENABLED === '1'
+  const replyTask = (async() => {
+    const l = log.addedCtx('reply')
+    if(!botEnabled) {
+      log.I('Bot is disabled')
+      return
+    }
+    if(!edit) {
+      log.I('Not replying to edits')
+      return
+    }
 
-      const completion = { sent: false }
-      try {
-        await Db.tran(pool, async(db) => {
-          await Logic.reply(
-            pool,
-            db,
-            l,
-            Logic.fromMessageDate(message.date),
-            message.chat.id,
-            completion
-          )
-        })
+    const completion = { sent: false }
+    try {
+      await Db.tran(pool, async(db) => {
+        await Logic.reply(
+          pool,
+          db,
+          l,
+          Logic.fromMessageDate(message.date),
+          message.chat.id,
+          completion
+        )
+      })
+    }
+    catch(error) {
+      l.E([error])
+      if(!completion.sent) {
+        const emojis = ['🙂', '💀', '☠']
+        const text = 'Бот шандарахнулся ' + emojis[Math.floor(Math.random() * emojis.length)]
+        await Logic.sendMessage(message.chat.id, text, log)
       }
-      catch(error) {
-        l.E([error])
-        if(!completion.sent) {
-          const emojis = ['🙂', '💀', '☠']
-          const text = 'Бот шандарахнулся ' + emojis[Math.floor(Math.random() * emojis.length)]
-          await Logic.sendMessage(message.chat.id, text, log)
-        }
-      }
-    })()
-    waitUntil(replyTask)
-  }
+    }
+  })()
+  waitUntil(replyTask)
 
   return new Response(JSON.stringify({}))
 }
