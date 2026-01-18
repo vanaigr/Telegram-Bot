@@ -10,6 +10,7 @@ import { OpenRouter } from '@openrouter/sdk'
 
 const chatId = -1002830050312
 const lastMessage = 4191
+const respond = false
 
 const log = L.makeLogger(undefined, undefined)
 
@@ -20,7 +21,7 @@ const conn = await pool.connect()
 const openRouter = new OpenRouter({ apiKey: process.env.OPENROUTER_KEY! });
 
 try {
-  let messages = await Logic.fetchMessages(conn, log, chatId, lastMessage)
+  let messages = await Logic.fetchMessages(conn, log, chatId, { lastMessage, skipImages: true })
   //messages = messages.slice(messages.length - 20)
 
   const openrouterMessages = await Logic.messagesToModelInput({
@@ -32,22 +33,24 @@ try {
 
   debugPrint(openrouterMessages)
 
-  let response: any
-  try {
-    response = await Logic.sendPrompt(
-      openRouter,
-      openrouterMessages,
-      Logic.systemPrompt
-    )
-  }
-  catch(error) {
-    console.error('during response generation')
-    throw error
-  }
+  if(respond) {
+    let response: any
+    try {
+      response = await Logic.sendPrompt(
+        openRouter,
+        openrouterMessages,
+        Logic.systemPrompt
+      )
+    }
+    catch(error) {
+      console.error('during response generation')
+      throw error
+    }
 
-  debugPrint(response)
+    debugPrint(response)
 
-  await debugSave({ chatId, lastMessage, response })
+    await debugSave({ chatId, lastMessage, response })
+  }
 
   conn.release()
   await pool.end()

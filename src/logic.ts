@@ -608,7 +608,7 @@ export async function fetchMessages(
   conn: Db.DbTransaction,
   log: L.Log,
   chatId: number,
-  lastMessage?: number
+  ctx?: { lastMessage?: number, skipImages?: boolean }
 ): Promise<MessageWithAttachments[]> {
   const t = Db.t.messages
   const messagesRaw = await Db.query(conn,
@@ -628,7 +628,7 @@ export async function fetchMessages(
     ],
     'from', t,
     'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
-    ...(lastMessage !== undefined ? ['and', t.messageId, '<=', Db.param(lastMessage)] : []),
+    ...(ctx?.lastMessage !== undefined ? ['and', t.messageId, '<=', Db.param(ctx.lastMessage)] : []),
     'order by', t.messageId, 'asc', // date resolution is too low
   )
   if(messagesRaw.length === 0) {
@@ -656,7 +656,7 @@ export async function fetchMessages(
     }
   })
 
-  {
+  if(ctx?.skipImages !== true) {
     // Insertion order is from latest to earliest.
     const fileUniqueIds = new Set<string>()
     for(let off = 0; off < Math.min(20, messages.length); off++) {
@@ -701,7 +701,14 @@ type LlmMessage = {
   >
 } | {
   role: 'assistant'
-  content: string
+  content: Array<
+    { type: 'text', text: string, cacheControl?: { type: 'ephemeral' } }
+  >
+} | {
+  role: 'system'
+  content: Array<
+    { type: 'text', text: string, cacheControl?: { type: 'ephemeral' } }
+  >
 }
 
 export async function messagesToModelInput(
@@ -731,14 +738,7 @@ export async function messagesToModelInput(
   }
 
   for(const { msg, photos, reactions } of messages) {
-    if(msg.from?.username === 'balbes52_bot') {
-      openrouterMessages.push({
-        role: 'assistant',
-        content: msg.text ?? '',
-      })
-      continue
-    }
-    else if(msg.new_chat_title !== undefined) {
+    if(msg.new_chat_title !== undefined) {
       openrouterMessages.push({
         role: 'user',
         content: [{
@@ -754,7 +754,7 @@ export async function messagesToModelInput(
         content: [{
           type: 'text',
           text: JSON.stringify({
-            newChatMembers: msg.new_chat_members.map(it => userToString(it)),
+            newChatMembers: msg.new_chat_members.map(it => userToString(it, true)),
           }),
         }],
       })
@@ -766,22 +766,37 @@ export async function messagesToModelInput(
         content: [{
           type: 'text',
           text: JSON.stringify({
-            leftChatMember: userToString(msg.left_chat_member),
+            leftChatMember: userToString(msg.left_chat_member, true),
           }),
         }],
       })
       continue
     }
 
+    openrouterMessages.push({
+      role: 'system',
+      content: [{
+        type: 'text',
+        text: JSON.stringify(messageHeaders(msg, reactions)),
+      }],
+    })
+
+    if(msg.from?.username === 'balbes52_bot') {
+      openrouterMessages.push({
+        role: 'assistant',
+        content: [{ type: 'text', text: msg.text ?? '<ERROR: NO TEXT>' }],
+      })
+      continue
+    }
+
     let text = ''
-    text += JSON.stringify(messageHeaders(msg, reactions)) + '\n'
     if(msg.reply_to_message) {
       text += '> ' + JSON.stringify(messageHeaders(msg.reply_to_message, undefined)) + '\n'
       const replyText = messageText(msg.reply_to_message)
       text += replyText.split('\n').map(it => '> ' + it).join('\n')
       text += '\n'
     }
-    text += messageText(msg) + '\n'
+    text += messageText(msg) + '\n\n'
 
     openrouterMessages.push({
       role: 'user',
@@ -961,10 +976,10 @@ export function messageHeaders(
   const headers: Record<string, unknown> = {}
   headers.messageId = msg.message_id
   if(msg.from) {
-    headers.from = userToString(msg.from)
+    headers.sender = userToString(msg.from, true)
   }
   else {
-    headers.from = userToString(adminUser)
+    headers.sender = userToString(adminUser, true)
   }
 
   headers.at = dateToString(fromMessageDate(msg.date))
@@ -981,10 +996,10 @@ export function messageHeaders(
 
       let name: string
       if(reaction.user) {
-        name = userToString(reaction.user)
+        name = userToString(reaction.user, false)
       }
       else {
-        name = userToString(adminUser)
+        name = userToString(adminUser, false)
       }
 
       reactionsObj[name] = result.join('')
@@ -1006,15 +1021,24 @@ export function messageText(msg: Types.Message) {
   return (msg.text ?? msg.caption ?? '<no message>').trim()
 }
 
-function userToString(user: Types.User) {
-  if(user.username === 'GroupAnonymousBot') return 'Admin'
-
-  const fullName = user.first_name + ' ' + (user.last_name ?? '')
-  return fullName.trim() + ' (@' + user.username + ')'
+function userToString(user: Types.User, full: boolean) {
+  if(user.username === 'GroupAnonymousBot' || user.username === undefined) {
+    return 'God User'
+  }
+  if(full) {
+    const fullName = user.first_name + ' ' + (user.last_name ?? '')
+    return fullName.trim() + ' (@' + user.username + ')'
+  }
+  else {
+    return '@' + user.username
+  }
 }
 
 function dateToString(date: T.Instant) {
-  return date.toZonedDateTimeISO('Europe/Moscow').toPlainDateTime().toString()
+  const dt = date.toZonedDateTimeISO('Europe/Moscow').toPlainDateTime()
+  return dt.toLocaleString(undefined, { weekday: 'short' })
+    + ' '
+    + dt.toString().replace('T', ' ')
 }
 
 function startTypingTask(chatId: number, log: L.Log) {
