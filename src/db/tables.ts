@@ -119,4 +119,8 @@ export const tables = {
     "chatWhitelist": {
         "id": t_bigint,
     },
+    "debug": {
+        "sequenceNumber": t_integer,
+        "raw": t_json,
+    },
 } as const

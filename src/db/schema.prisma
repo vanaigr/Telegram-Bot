@@ -86,3 +86,9 @@ model chatLocks {
 model chatWhitelist {
     id BigInt @id
 }
+
+model debug {
+    sequenceNumber Int @id @default(autoincrement())
+    raw Json
+    createdAt DateTime @db.Timestamp(6) @default(now())
+}
