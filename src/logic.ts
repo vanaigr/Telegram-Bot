@@ -352,10 +352,14 @@ export async function reply(
   let reply: string | undefined
   let reactionsToSend: { emoji: string, messageId: number }[] = []
   const openRouter = new OpenRouter({ apiKey: process.env.OPENROUTER_KEY! });
-  while(true) {
-    log.I('Sending conversation')
+  for(let iteration = 0;; iteration++) {
+    if(iteration > 3) {
+      log.W('Too many steps')
+      reply = ''
+      break
+    }
 
-    let stop = false
+    log.I('Sending conversation')
 
     const response = await sendPrompt(openRouter, openrouterMessages, systemPrompt)
     log.I('Responded')
@@ -376,7 +380,7 @@ export async function reply(
     if(finishReason === 'tool_calls') {
       openrouterMessages.push(response.choices[0].message)
 
-      const results = await Promise.all(response.choices[0].message.toolCalls!.map(async(tool) => {
+      const results = response.choices[0].message.toolCalls!.map((tool) => {
         const args = JSON.parse(tool.function.arguments)
         log.I('Tool call ', tool.function.name, ' with ', [args])
 
@@ -405,7 +409,7 @@ export async function reply(
             }
           }
           else {
-            log.W('Malformed reaction: ', [JSON.parse(tool.function.arguments)])
+            log.W('Malformed reaction')
             // Don't bother it
             return {
               role: 'tool' as const,
@@ -414,63 +418,6 @@ export async function reply(
             }
           }
         }
-        else if(tool.function.name === 'skip_reply') {
-          stop = true
-          return {
-            role: 'tool' as const,
-            toolCallId: tool.id,
-            content: 'Reply will be skipped',
-          }
-        }
-        /*
-        else if(tool.function.name === 'search') {
-          log.I('Using search')
-
-          try {
-            const searchResult = await openRouter.chat.send({
-              model: 'nvidia/nemotron-3-nano-30b-a3b:free',
-              plugins: [{
-                id: 'web',
-                enabled: true,
-                maxResults: 3,
-                searchPrompt: '',
-              }],
-              messages: [
-                { role: 'system', content: searchPrompt },
-                { role: 'user', content: tool.function.arguments }
-              ],
-            })
-            log.I('Search done')
-
-            await Db.insertMany(
-              conn,
-              Db.t.responses,
-              Db.omit(Db.d.responses, ['sequenceNumber']),
-              [{
-                respondsToChatId: chatId,
-                respondsToMessageId: messages.at(-1)!.msg.message_id,
-                raw: JSON.stringify(searchResult),
-              }],
-              {}
-            )
-
-            return {
-              role: 'tool' as const,
-              toolCallId: tool.id,
-              content: searchResult.choices[0].message.content?.toString() ?? '??',
-            }
-          }
-          catch(error) {
-            log.E('Search failed ', [error])
-
-            return {
-              role: 'tool' as const,
-              toolCallId: tool.id,
-              content: 'Error: search failed',
-            }
-          }
-        }
-        */
         else {
           log.W('Unknown tool ', [tool])
           return {
@@ -479,7 +426,7 @@ export async function reply(
             content: 'Error: unknown tool',
           }
         }
-      }))
+      })
 
       for(const result of results) openrouterMessages.push(result)
     }
@@ -494,8 +441,8 @@ export async function reply(
       }
       break
     }
-
-    if(stop) {
+    else {
+      log.W('Unknown finishReason: ', [finishReason])
       reply = ''
       break
     }
@@ -504,18 +451,18 @@ export async function reply(
   cancelTypingStatus()
 
   const sendingP = (async() => {
-    if(reply === '') {
+    const forTestingReply = reply.trim()
+    if(
+      forTestingReply === '<NO_OUTPUT>'
+        || forTestingReply === 'NO_OUTPUT'
+        || forTestingReply === '<>'
+        || forTestingReply === ''
+        || forTestingReply.length > 4000
+    ) {
       log.I('Skipping response')
       completion.sent = true
       return
     }
-    /*
-    if(reply === '<empty>' || reply === '<>' || reply === '') {
-      log.I('Empty response')
-      completion.sent = true
-      return
-    }
-    */
 
     log.I('Sending response')
     const responseResult = await sendMessage(chatId, reply, log)
@@ -588,10 +535,10 @@ You are a group chat participant, a typical 20-something year old. Write a reply
 
 Rules:
 - Don't write essays. Nobody wants to read a lot.
-- If you can capture your response as a single emoji, use 'message_reaction' tool. If you think a reaction is enough, use 'message_reaction' tool and the 'skip_reply' tool together to only do a reaction.
+- If you can capture your response as a single emoji, use 'message_reaction' tool. If you think a reaction is enough, use 'message_reaction' tool and respond with <NO_OUTPUT> together to only do a reaction.
 
 **Important rule:**
-- After deciding what to say, consider whether the users want your input. If they don’t, or if they're talking among themselves, call the 'skip_reply' tool.
+- Consider whether the users want your input. If they don’t, or if they're talking among themselves, respond with <NO_OUTPUT>.
 
 `.trim() + '\n'
 
@@ -632,45 +579,6 @@ export async function sendPrompt(
           }
         },
       },
-      {
-        type: 'function',
-        function: {
-          name: 'skip_reply',
-          description: 'Makes so that your reply is not sent',
-        },
-      },
-      /*
-
-        Whatever openrouter does for the search plugin does not work
-        if I enable it after tool calls. The tool is available, but it doesn't
-        intercept it, and I receive the tool. Even though it bills as if it
-        did web search.
-
-        I tried wrapping the search in a second model, but all the free ones are bad.
-
-        {
-          type: 'function',
-          function: {
-            name: 'search',
-            // Model said that this is the tool description. I don't trust it.
-            //Поиск информации в интернете. ИСПОЛЬЗУЙ ТОЛЬКО ЕСЛИ НУ ПРЯМ ВАЩЕ КРАЙ И БЕЗ НЕГО НИКАК.
-
-            description: 'Enables search. Use this only if asked by the user. In the output, mention that this is expensive.',
-            parameters: {
-              type: "object",
-              properties: {
-                queries: {
-                  type: "array",
-                  items: {
-                    type: "string",
-                  },
-                },
-              },
-              required: ["queries"],
-            }
-          }
-        }
-        */
     ],
     stream: false,
     messages: [
