@@ -342,7 +342,12 @@ export async function reply(
     const messages = await fetchMessages(conn, log, chatId)
     return messages.slice(messages.length - 30)
   })()
-  const openrouterMessages: OpenRouterMessage[] = await messagesToModelInput(messages, await chatInfoP, log)
+  const openrouterMessages: OpenRouterMessage[] = await messagesToModelInput({
+    messages,
+    chatInfo: await chatInfoP,
+    log,
+    caching: true,
+  })
 
   let reply: string | undefined
   let reactionsToSend: { emoji: string, messageId: number }[] = []
@@ -783,7 +788,7 @@ export async function fetchMessages(
 type LlmMessage = {
   role: 'user'
   content: Array<
-    { type: 'text', text: string }
+    { type: 'text', text: string, cacheControl?: { type: 'ephemeral' } }
       | { type: 'image_url', imageUrl: { url: string } }
   >
 } | {
@@ -792,9 +797,14 @@ type LlmMessage = {
 }
 
 export async function messagesToModelInput(
-  messages: MessageWithAttachments[],
-  chatInfo: Types.ChatFullInfo | undefined,
-  log: L.Log
+  {
+    messages, log, chatInfo, caching,
+  }: {
+    messages: MessageWithAttachments[],
+    chatInfo: Types.ChatFullInfo | undefined,
+    log: L.Log
+    caching: boolean
+  }
 ): Promise<LlmMessage[]> {
   const openrouterMessages: LlmMessage[] = []
 
@@ -925,11 +935,12 @@ export async function messagesToModelInput(
       openrouterMessages2.push(message)
     }
   }
-  *.
+  */
 
   // Crashes openrouter
-  /*
   ;(() => {
+    if(!caching) return
+
     for(let j = openrouterMessages.length - 1; j > -1; j--) {
       const message = openrouterMessages[j]
       if(typeof message.content === 'string') {
@@ -955,7 +966,6 @@ export async function messagesToModelInput(
 
     log.I('No cache')
   })()
-  */
 
   return openrouterMessages
 }

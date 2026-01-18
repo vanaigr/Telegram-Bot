@@ -23,11 +23,12 @@ try {
   let messages = await Logic.fetchMessages(conn, log, chatId, lastMessage)
   //messages = messages.slice(messages.length - 20)
 
-  const openrouterMessages = await Logic.messagesToModelInput(
+  const openrouterMessages = await Logic.messagesToModelInput({
     messages,
-    (await Logic.getChatDataFromDb(conn, chatId))!.raw,
+    chatInfo: (await Logic.getChatDataFromDb(conn, chatId))!.raw,
     log,
-  )
+    caching: false,
+  })
 
   debugPrint(openrouterMessages)
 
