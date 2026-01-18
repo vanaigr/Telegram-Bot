@@ -109,15 +109,17 @@ export async function updateReactionRows(
   )
 }
 
-export async function downloadPhoto(
+export async function startPhotoTask(
   pool: Db.DbPool,
-  log: L.Log,
+  baseLog: L.Log,
   chatId: number,
-  photo: Types.PhotoSize
+  photo: Types.PhotoSize | undefined
 ) {
-  log.I('Downloading')
+  if(!photo) return
 
-  await Db.timedTran(pool, async(db) => {
+  const log = baseLog.addedCtx('photo ', [photo.file_unique_id])
+
+  const shouldDownload = await Db.timedTran(pool, async(db) => {
     const t = Db.t.photos
     const schema = Db.d.photos
 
@@ -130,7 +132,7 @@ export async function downloadPhoto(
 
     if(existing) {
       log.I(' Already exists')
-      return
+      return false
     }
 
     await Db.insertMany(db, t, schema, [{
@@ -142,69 +144,93 @@ export async function downloadPhoto(
       downloadStartDate: T.Now.instant().toJSON(),
     }], {})
 
-    try {
-      log.I('Getting file url')
-
-      const fileInfoUrl = new URL(
-        `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN!}/getFile`
-      )
-      fileInfoUrl.searchParams.set('file_id', photo.file_id)
-      const fileInfoResult = await U.request<TelegramWrapper<Types.File>>({
-        url: fileInfoUrl,
-        log,
-      })
-      if(fileInfoResult.status !== 'ok') throw new Error()
-      if(!fileInfoResult.data.ok) {
-        log.E([fileInfoResult.data])
-        throw new Error()
-      }
-      const fileInfo = fileInfoResult.data.result
-
-      log.I('Getting File')
-
-      const fileUrl = new URL(
-        `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN!}/`
-          + encodeURIComponent(fileInfo.file_path)
-      )
-
-      const response = await fetch(fileUrl)
-      if (!response.ok) {
-        const bodyMessage: L.Message = await response.text().then(
-          (it) => ['Body: ', [it]],
-          (e) => ['Body error: ', [e]],
-        );
-        log.E('Response status: ', [response.status], '\n', ...bodyMessage);
-        throw new Error()
-      }
-
-      log.I('Getting file')
-      const buffer = await streamConsumers.buffer(response.body!)
-
-      log.I('Done downloading')
-
-      await Db.queryRaw(db,
-        'update', t,
-        'set', Db.list([
-          Db.set(t.status, Db.param('done' as const)),
-          Db.set(t.bytes, Db.param(buffer)),
-        ]),
-        'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
-        'and', Db.eq(t.fileUniqueId, Db.param(photo.file_unique_id)),
-      )
-    }
-    catch(error) {
-      log.I('Failed to download file ', [error])
-
-      await Db.queryRaw(db,
-        'update', t,
-        'set', Db.list([
-          Db.set(t.status, Db.param('error' as const)),
-        ]),
-        'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
-        'and', Db.eq(t.fileUniqueId, Db.param(photo.file_unique_id)),
-      )
-    }
+    return true
   })
+
+  if(shouldDownload) {
+    waitUntil((async() => {
+      try {
+        await downloadPhoto(pool, log, chatId, photo)
+      }
+      catch(err) {
+        log.E('While downloading: ', [err])
+      }
+    })())
+  }
+}
+
+export async function downloadPhoto(
+  pool: Db.DbPool,
+  log: L.Log,
+  chatId: number,
+  photo: Types.PhotoSize
+) {
+  log.I('Downloading')
+
+  const t = Db.t.photos
+
+  try {
+    log.I('Getting file url')
+
+    const fileInfoUrl = new URL(
+      `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN!}/getFile`
+    )
+    fileInfoUrl.searchParams.set('file_id', photo.file_id)
+    const fileInfoResult = await U.request<TelegramWrapper<Types.File>>({
+      url: fileInfoUrl,
+      log,
+    })
+    if(fileInfoResult.status !== 'ok') throw new Error()
+    if(!fileInfoResult.data.ok) {
+      log.E([fileInfoResult.data])
+      throw new Error()
+    }
+    const fileInfo = fileInfoResult.data.result
+
+    log.I('Getting File')
+
+    const fileUrl = new URL(
+      `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN!}/`
+        + encodeURIComponent(fileInfo.file_path)
+    )
+
+    const response = await fetch(fileUrl)
+    if (!response.ok) {
+      const bodyMessage: L.Message = await response.text().then(
+        (it) => ['Body: ', [it]],
+        (e) => ['Body error: ', [e]],
+      );
+      log.E('Response status: ', [response.status], '\n', ...bodyMessage);
+      throw new Error()
+    }
+
+    log.I('Getting file')
+    const buffer = await streamConsumers.buffer(response.body!)
+
+    log.I('Done downloading')
+
+    await Db.queryRaw(pool,
+      'update', t,
+      'set', Db.list([
+        Db.set(t.status, Db.param('done' as const)),
+        Db.set(t.bytes, Db.param(buffer)),
+      ]),
+      'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
+      'and', Db.eq(t.fileUniqueId, Db.param(photo.file_unique_id)),
+    )
+  }
+  catch(error) {
+    log.I('Failed to download file ', [error])
+
+    await Db.queryRaw(pool,
+      'update', t,
+      'set', Db.list([
+        Db.set(t.status, Db.param('error' as const)),
+      ]),
+      'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
+      'and', Db.eq(t.fileUniqueId, Db.param(photo.file_unique_id)),
+    )
+  }
 }
 
 export async function reply(

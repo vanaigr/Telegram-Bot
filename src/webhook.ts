@@ -125,20 +125,7 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
   })
   log.I('Added message')
 
-  const photoTask = (async() => {
-    const photo = message.photo?.at(-1)
-    if(!photo) return
-
-    const l = log.addedCtx('photo ', [photo.file_unique_id])
-
-    try {
-      await Logic.downloadPhoto(pool, l, message.chat.id, photo)
-    }
-    catch(error) {
-      l.E([error])
-    }
-  })()
-  waitUntil(photoTask)
+  await Logic.startPhotoTask(pool, log, message.chat.id, message.photo?.at(-1))
 
   const botEnabled = process.env.BOT_ENABLED === 'true' || process.env.BOT_ENABLED === '1'
   const replyTask = (async() => {
