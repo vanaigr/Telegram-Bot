@@ -530,16 +530,35 @@ export async function reply(
 
 type TelegramWrapper<T> = { ok: true, result: T } | { ok: false, description: string }
 
-export const systemPrompt = `
-You are a group chat participant, a typical 20-something year old. Write a reply if you think users would appreciate it or if they ask you (@balbes52_bot, Балбес, etc.).
+const systemPrompt =
+  `
+You are participating in a casual group chat.
+Your username is **Балбес (@balbes52_bot)**.
 
-Rules:
-- Don't write essays. Nobody wants to read a lot.
-- If you can capture your response as a single emoji, use 'message_reaction' tool. If you think a reaction is enough, use 'message_reaction' tool and respond with <NO_OUTPUT> together to only do a reaction.
+### Persona
 
-**Important rule:**
-- Consider whether the users want your input. If they don’t, or if they're talking among themselves, respond with <NO_OUTPUT>.
+* Age: early–mid 20s
+* Tone: casual, internet-native
 
+### When to Respond
+
+Reply only if:
+* A message is directly addressed to you, or
+* You have something genuinely relevant, funny, helpful, or socially appropriate to add, and a real person in a group chat would reasonably chime in
+* If your participation is unnecessary, stay silent
+
+### Output Rules
+
+* If you decide **not** to respond, output exactly: ${'`'}NO_OUTPUT${'`'}
+* Consider using ${'`'}message_reaction${'`'} tool if a response can be conveyed as a single emoji. You can still respond with your reply, or omit the reply by responding with ${'`'}NO_OUTPUT${'`'}
+
+### Behavioral Constraints
+
+* Do **not** reply to every message
+* Do **not** dominate the conversation
+* Avoid repeating what others just said
+
+Your goal is to feel like a real, low-key group chat participant—not a bot trying to be helpful.
 `.trim() + '\n'
 
 export async function sendPrompt(
@@ -556,6 +575,7 @@ export async function sendPrompt(
     //model: 'moonshotai/kimi-k2-0905',
     //model: 'moonshotai/kimi-k2-thinking',
     //model: 'openai/gpt-oss-120b', // explodes
+    maxCompletionTokens: 3000,
     provider: {
       dataCollection: 'deny',
     },
@@ -608,7 +628,7 @@ export async function fetchMessages(
   conn: Db.DbTransaction,
   log: L.Log,
   chatId: number,
-  lastMessage?: number
+  ctx?: { lastMessage?: number, skipImages?: boolean },
 ): Promise<MessageWithAttachments[]> {
   const t = Db.t.messages
   const messagesRaw = await Db.query(conn,
@@ -628,7 +648,7 @@ export async function fetchMessages(
     ],
     'from', t,
     'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
-    ...(lastMessage !== undefined ? ['and', t.messageId, '<=', Db.param(lastMessage)] : []),
+    ...(ctx?.lastMessage !== undefined ? ['and', t.messageId, '<=', Db.param(ctx.lastMessage)] : []),
     'order by', t.messageId, 'asc', // date resolution is too low
   )
   if(messagesRaw.length === 0) {
@@ -656,7 +676,7 @@ export async function fetchMessages(
     }
   })
 
-  {
+  if(ctx?.skipImages !== true) {
     // Insertion order is from latest to earliest.
     const fileUniqueIds = new Set<string>()
     for(let off = 0; off < Math.min(20, messages.length); off++) {
@@ -701,7 +721,14 @@ type LlmMessage = {
   >
 } | {
   role: 'assistant'
-  content: string
+  content: Array<
+    { type: 'text', text: string, cacheControl?: { type: 'ephemeral' } }
+  >
+} | {
+  role: 'system'
+  content: Array<
+    { type: 'text', text: string, cacheControl?: { type: 'ephemeral' } }
+  >
 }
 
 export async function messagesToModelInput(
@@ -731,14 +758,7 @@ export async function messagesToModelInput(
   }
 
   for(const { msg, photos, reactions } of messages) {
-    if(msg.from?.username === 'balbes52_bot') {
-      openrouterMessages.push({
-        role: 'assistant',
-        content: msg.text ?? '',
-      })
-      continue
-    }
-    else if(msg.new_chat_title !== undefined) {
+    if(msg.new_chat_title !== undefined) {
       openrouterMessages.push({
         role: 'user',
         content: [{
@@ -754,7 +774,7 @@ export async function messagesToModelInput(
         content: [{
           type: 'text',
           text: JSON.stringify({
-            newChatMembers: msg.new_chat_members.map(it => userToString(it)),
+            newChatMembers: msg.new_chat_members.map(it => userToString(it, true)),
           }),
         }],
       })
@@ -766,22 +786,38 @@ export async function messagesToModelInput(
         content: [{
           type: 'text',
           text: JSON.stringify({
-            leftChatMember: userToString(msg.left_chat_member),
+            leftChatMember: userToString(msg.left_chat_member, true),
           }),
         }],
       })
       continue
     }
 
-    let text = ''
-    text += JSON.stringify(messageHeaders(msg, reactions)) + '\n'
-    if(msg.reply_to_message) {
-      text += '> ' + JSON.stringify(messageHeaders(msg.reply_to_message, undefined)) + '\n'
-      const replyText = messageText(msg.reply_to_message)
-      text += replyText.split('\n').map(it => '> ' + it).join('\n')
-      text += '\n'
+    openrouterMessages.push({
+      role: 'system',
+      content: [{
+        type: 'text',
+        text: messageHeaders(msg, reactions),
+      }],
+    })
+
+    if(msg.from?.username === 'balbes52_bot') {
+      openrouterMessages.push({
+        role: 'assistant',
+        content: [{ type: 'text', text: msg.text ?? '<ERROR: NO TEXT>' }],
+      })
+      continue
     }
-    text += messageText(msg) + '\n'
+
+    let text = ''
+    if(msg.reply_to_message) {
+      let replyText = ''
+      replyText += messageHeaders(msg.reply_to_message, undefined)
+      replyText += messageText(msg.reply_to_message)
+
+      text += replyText.trim().split('\n').map(it => '> ' + it).join('\n') + '\n'
+    }
+    text += messageText(msg)
 
     openrouterMessages.push({
       role: 'user',
@@ -958,16 +994,25 @@ export function messageHeaders(
   msg: Types.Message,
   reactions: Types.MessageReactionUpdated[] | undefined
 ) {
-  const headers: Record<string, unknown> = {}
-  headers.messageId = msg.message_id
+  let headers = ''
+
+  headers += 'messageId: ' + msg.message_id + '\n'
+
+  headers += 'Sender: '
   if(msg.from) {
-    headers.from = userToString(msg.from)
+    headers += '' + userToString(msg.from, true)
   }
   else {
-    headers.from = userToString(adminUser)
+    headers += '' + userToString(adminUser, true)
   }
 
-  headers.at = dateToString(fromMessageDate(msg.date))
+  headers += ', ' + dateToString(fromMessageDate(msg.date)) + '\n'
+
+  if(msg.edit_date !== undefined) {
+    headers += 'Edited at: '
+    headers += dateToString(fromMessageDate(msg.edit_date))
+    headers += '\n'
+  }
 
   if(reactions) {
     const reactionsObj: Record<string, unknown> = {}
@@ -981,40 +1026,74 @@ export function messageHeaders(
 
       let name: string
       if(reaction.user) {
-        name = userToString(reaction.user)
+        name = userToString(reaction.user, false)
       }
       else {
-        name = userToString(adminUser)
+        name = userToString(adminUser, false)
       }
 
       reactionsObj[name] = result.join('')
     }
 
     if(Object.keys(reactionsObj).length > 0) {
-      headers.reactions = reactionsObj
+      headers += 'Reactions: '
+      headers += Object.entries(reactionsObj).map(([name, emojis]) => {
+        return name + ' - ' + emojis
+      }).join(', ')
+      headers += '\n'
     }
-  }
-
-  if(msg.edit_date !== undefined) {
-    headers.editedAt = dateToString(fromMessageDate(msg.edit_date))
   }
 
   return headers
 }
 
 export function messageText(msg: Types.Message) {
-  return (msg.text ?? msg.caption ?? '<no message>').trim()
+  /*
+  const chars = [...new Set((msg.text ?? msg.caption ?? '<no message>'))]
+    .map(it => it.codePointAt(0)!)
+    .sort((a, b) => a - b)
+    .map(it => [it, String.fromCodePoint(it)])
+  console.log(chars)
+  */
+
+  const body = [...(msg.text ?? msg.caption ?? '<no message>')]
+    .map(it => it.codePointAt(0)!)
+    .filter(it => {
+      return it <= 1103
+
+      // User by telegram for emojis or something
+      // Some combining chars
+      if(it >= 8400 && it <= 8432) return false
+      // Variation selectors
+      if(it >= 65024 && it <= 65039) return false
+
+      return true
+    })
+    .map(it => String.fromCodePoint(it))
+    .join('')
+
+  return `"""\n` + body + `"""`
 }
 
-function userToString(user: Types.User) {
-  if(user.username === 'GroupAnonymousBot') return 'Admin'
+function userToString(user: Types.User, full: boolean) {
+  if(user.username === 'GroupAnonymousBot' || user.username === undefined) {
+    return 'God Inanovich'
+  }
 
-  const fullName = user.first_name + ' ' + (user.last_name ?? '')
-  return fullName.trim() + ' (@' + user.username + ')'
+  if(full) {
+    const fullName = user.first_name + ' ' + (user.last_name ?? '')
+    return fullName.trim() + ' (@' + user.username + ')'
+  }
+  else {
+    return '@' + user.username
+  }
 }
 
 function dateToString(date: T.Instant) {
-  return date.toZonedDateTimeISO('Europe/Moscow').toPlainDateTime().toString()
+  const dt = date.toZonedDateTimeISO('Europe/Moscow').toPlainDateTime()
+  return dt.toLocaleString(undefined, { weekday: 'short' })
+    + ' '
+    + dt.toString().replace('T', ' ')
 }
 
 function startTypingTask(chatId: number, log: L.Log) {
