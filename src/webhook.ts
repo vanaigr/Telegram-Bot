@@ -147,7 +147,7 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
       log.I('Bot is disabled')
       return
     }
-    if(!edit) {
+    if(edit) {
       log.I('Not replying to edits')
       return
     }
