@@ -164,6 +164,8 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
   log.I('Added message')
 
   await Logic.startPhotoTask(pool, log, message.chat.id, message.photo?.at(-1))
+  await Logic.startPhotoTask(pool, log, message.chat.id, message.video?.thumbnail)
+  await Logic.startPhotoTask(pool, log, message.chat.id, message.video_note?.thumbnail)
 
   const botEnabled = process.env.BOT_ENABLED === 'true'
     || process.env.BOT_ENABLED === '1'

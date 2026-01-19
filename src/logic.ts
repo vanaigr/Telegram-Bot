@@ -780,11 +780,21 @@ type Photo = {
   data: Buffer
   info: Types.PhotoSize
 }
+type Video = {
+  info: Types.Video
+  thumbnail: Photo | undefined
+}
+type VideoNote = {
+  info: Types.VideoNote
+  thumbnail: Photo | undefined
+}
 
 type MessageWithAttachments = {
   msg: Types.Message
   reactions: Types.MessageReactionUpdated[]
   photos: Photo[]
+  video: Video | undefined
+  videoNote: VideoNote | undefined
 }
 
 export async function fetchMessages(
@@ -835,7 +845,43 @@ export async function fetchMessages(
             info: photo,
           }
         ]
-      })()
+      })(),
+      video: ((): Video | undefined => {
+        const video = msg.video
+        if(!video) return undefined
+
+        return {
+          info: video,
+          thumbnail: (() => {
+            const photo = video.thumbnail
+            if(!photo) return undefined
+            return {
+              file_unique_id: photo.file_unique_id,
+              status: 'not-available',
+              data: Buffer.from([]),
+              info: photo,
+            }
+          })(),
+        }
+      })(),
+      videoNote: ((): VideoNote | undefined => {
+        const videoNote = msg.video_note
+        if(!videoNote) return undefined
+
+        return {
+          info: videoNote,
+          thumbnail: (() => {
+            const photo = videoNote.thumbnail
+            if(!photo) return undefined
+            return {
+              file_unique_id: photo.file_unique_id,
+              status: 'not-available',
+              data: Buffer.from([]),
+              info: photo,
+            }
+          })(),
+        }
+      })(),
     }
   })
 
@@ -843,10 +889,12 @@ export async function fetchMessages(
     // Insertion order is from latest to earliest.
     const fileUniqueIds = new Set<string>()
     for(let off = 0; off < Math.min(20, messages.length); off++) {
-      const { photos } = messages[messages.length - 1 - off]
+      const { photos, video, videoNote } = messages[messages.length - 1 - off]
       for(let j = photos.length - 1; j > -1; j--) {
         fileUniqueIds.add(photos[j].file_unique_id)
       }
+      if(video?.thumbnail) fileUniqueIds.add(video.thumbnail.file_unique_id)
+      if(videoNote?.thumbnail) fileUniqueIds.add(videoNote.thumbnail.file_unique_id)
     }
 
     const t = Db.t.photos
@@ -864,6 +912,23 @@ export async function fetchMessages(
 
     for(const message of messages) {
       for(const photo of message.photos) {
+        const photoRow = photoRowsById.get(photo.file_unique_id)
+        if(photoRow !== undefined) {
+          photo.status = photoRow.status
+          photo.data = photoRow.bytes
+        }
+      }
+      if(message.video?.thumbnail) {
+        const photo = message.video.thumbnail
+        const photoRow = photoRowsById.get(photo.file_unique_id)
+        if(photoRow !== undefined) {
+          photo.status = photoRow.status
+          photo.data = photoRow.bytes
+        }
+      }
+      if(message.videoNote?.thumbnail) {
+        const photo = message.videoNote.thumbnail
+        if(!photo) continue
         const photoRow = photoRowsById.get(photo.file_unique_id)
         if(photoRow !== undefined) {
           photo.status = photoRow.status
@@ -920,7 +985,7 @@ export async function messagesToModelInput(
     })
   }
 
-  for(const { msg, photos, reactions } of messages) {
+  for(const { msg, photos, video, videoNote, reactions } of messages) {
     if(msg.new_chat_title !== undefined) {
       openrouterMessages.push({
         role: 'user',
@@ -981,67 +1046,85 @@ export async function messagesToModelInput(
     }
     text += messageText(msg) + '\n\n'
 
-    openrouterMessages.push({
-      role: 'user',
-      content: [
-        { type: 'text', text },
-        ...await Promise.all(photos.map(async(photo) => {
-          if(photo.status === 'done') {
-            const type = await new FileTypeParser().fromBuffer(photo.data)
-            if(type !== undefined) {
-              const dataUrl = `data:${type.mime};base64,${photo.data.toString("base64")}`;
-              return {
-                type: 'image_url' as const,
-                imageUrl: {
-                  url: dataUrl,
-                  detail: 'auto' as const,
-                },
-              }
-            }
-            else {
-              log.W('Could not detect file type for', photo.file_unique_id)
-            }
-          }
+    const content: Extract<LlmMessage, { role: 'user' }>['content'] = []
+    content.push({ type: 'text', text })
 
-          return {
-            type: 'text' as const,
-            text: '<image not available>',
-          }
-        })),
-        ...(() => {
-          const audio = msg.audio
-          if(audio === undefined) return []
-          return [{
-            type: 'text' as const,
-            text: '<audio not available>',
-          }]
-        })(),
-        ...(() => {
-          const video = msg.video
-          if(video === undefined) return []
-          return [{
-            type: 'text' as const,
-            text: '<video not available>',
-          }]
-        })(),
-      ]
-    })
-  }
-
-  /*
-  const openrouterMessages2: LlmMessage[] = []
-  for(const message of openrouterMessages) {
-    const prev = openrouterMessages2.at(-1)
-    if(prev?.role === 'user' && message.role === 'user') {
-      for(const part of message.content) {
-        prev.content.push(part)
+    for(const photo of photos) {
+      content.push(await photoToMessagePart(log, photo, '<image not available>'))
+    }
+    if(video) {
+      content.push({
+        type: 'text',
+        text: '<Video '
+          + (video.info.file_name ?? 'no name')
+          + ', '
+          + video.info.duration
+          + 'sec not available>\nThumbnail: '
+      })
+      if(video.thumbnail) {
+        content.push(await photoToMessagePart(
+          log,
+          video.thumbnail,
+          '<thumbnail not available>'
+        ))
       }
     }
-    else {
-      openrouterMessages2.push(message)
+    if(videoNote) {
+      content.push({
+        type: 'text',
+        text: `<Circular video, ${videoNote.info.duration}sec>\nThumbnail: `
+      })
+      if(videoNote.thumbnail) {
+        content.push(await photoToMessagePart(
+          log,
+          videoNote.thumbnail,
+          '<thumbnail not available>'
+        ))
+      }
     }
+    if(msg.voice) {
+      content.push({
+        type: 'text' as const,
+        text: `<voice, ${msg.voice.duration}sec not available>`,
+      })
+    }
+    if(msg.audio) {
+      content.push({
+        type: 'text' as const,
+        text: '<audio, '
+          + (msg.audio.title ?? msg.audio.file_name ?? 'unknown')
+          + ' by '
+          + (msg.audio.performer ?? 'unknown')
+          + ', '
+          + msg.audio.duration
+          + 'sec not available>',
+      })
+    }
+    if(msg.document) {
+      content.push({
+        type: 'text' as const,
+        text: '<document '
+          + (msg.document.mime_type ?? 'application/octet-stream')
+          + ' '
+          + (msg.document.file_name ?? 'no name')
+          + ' not available>',
+      })
+    }
+    if(msg.location) {
+      content.push({
+        type: 'text' as const,
+        text: `<location lat: ${msg.location.latitude}, lon: ${msg.location.longitude}>`,
+      })
+    }
+    if(msg.sticker) {
+      content.push({
+        type: 'text' as const,
+        text: `<sticker ${msg.sticker.emoji ?? 'not available'}>`,
+      })
+    }
+
+    openrouterMessages.push({ role: 'user', content })
   }
-  */
 
   // Crashes openrouter
   ;(() => {
@@ -1074,6 +1157,31 @@ export async function messagesToModelInput(
   })()
 
   return openrouterMessages
+}
+
+async function photoToMessagePart(log: L.Log, photo: Photo, fallback: string) {
+  if(photo.status === 'done') {
+    const type = await new FileTypeParser().fromBuffer(photo.data)
+    if(type !== undefined) {
+      const dataUrl = `data:${type.mime};base64,${photo.data.toString("base64")}`;
+      return {
+        type: 'image_url' as const,
+        imageUrl: {
+          url: dataUrl,
+          detail: 'auto' as const,
+        },
+      }
+    }
+    else {
+      log.W('Could not detect file type for', photo.file_unique_id)
+    }
+  }
+
+  return {
+    type: 'text' as const,
+    text: fallback,
+  }
+
 }
 
 export async function sendMessage(chatId: number, text: string, log: L.Log) {
