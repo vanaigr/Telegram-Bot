@@ -100,6 +100,12 @@ export const tables = {
         "respondsToChatId": t_bigint,
         "respondsToMessageId": t_bigint,
     },
+    "postFilterResponses": {
+        "sequenceNumber": t_integer,
+        "raw": t_json,
+        "respondsToChatId": t_bigint,
+        "respondsToMessageId": t_bigint,
+    },
     "chatFullInfo": {
         "id": t_bigint,
         "updatedAt": t_timestamp,
@@ -122,5 +128,6 @@ export const tables = {
     "debug": {
         "sequenceNumber": t_integer,
         "raw": t_json,
+        "createdAt": t_timestamp,
     },
 } as const

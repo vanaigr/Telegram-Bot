@@ -10,6 +10,9 @@ import * as L from './lib/log.ts'
 import * as U from './lib/util.ts'
 import type * as Types from './types.ts'
 
+const botName = 'балбес'
+const botUsername = 'balbes52_bot'
+
 export async function getChatDataFromDb(conn: Db.DbConnOrPool, chatId: number) {
   const t = Db.t.chatFullInfo
   return await Db.query(conn,
@@ -368,6 +371,9 @@ export async function reply(
     const messages = await fetchMessages(conn, log, chatId)
     return messages.slice(messages.length - 30)
   })()
+
+  const respondsToMessageId = messages.at(-1)!.msg.message_id
+
   const openrouterMessages: OpenRouterMessage[] = await messagesToModelInput({
     messages,
     chatInfo: await chatInfoP,
@@ -396,7 +402,7 @@ export async function reply(
       Db.omit(Db.d.responses, ['sequenceNumber']),
       [{
         respondsToChatId: chatId,
-        respondsToMessageId: messages.at(-1)!.msg.message_id,
+        respondsToMessageId,
         raw: JSON.stringify(response),
       }],
       {}
@@ -490,6 +496,13 @@ export async function reply(
       return
     }
 
+    const isUseful = await evaluateIsUseful(
+      messages.slice(messages.length - 9).map(it => it.msg),
+      reply,
+      { pool, openRouter, log, chatId, messageId: respondsToMessageId },
+    )
+    if(!isUseful) return
+
     log.I('Sending response')
     const responseResult = await sendMessage(chatId, reply, log)
     if(responseResult.status !== 'ok') {
@@ -533,8 +546,8 @@ export async function reply(
           date: now,
           user: {
             id: -1,
-            first_name: 'балбес',
-            username: 'balbes52_bot',
+            first_name: botName,
+            username: botUsername,
           },
           new_reaction: [{ type: 'emoji', emoji: it.emoji }],
         } satisfies Types.MessageReactionUpdated),
@@ -554,10 +567,110 @@ export async function reply(
   log.I('Done responding')
 }
 
+async function evaluateIsUseful(
+  lastMessages: Types.Message[],
+  modelReply: string,
+  ctx: {
+    openRouter: OpenRouter,
+    pool: Db.DbPool,
+    log: L.Log,
+    chatId: number,
+    messageId: number,
+  }
+): Promise<boolean> {
+  const log = ctx.log.addedCtx('filter')
+
+  log.I('Checking')
+
+  const botMessages = 1 + lastMessages.filter(it => it.from?.username === botUsername).length
+  if(botMessages / (lastMessages.length + 1) <= 0.21) {
+    log.I('First message in a while. Allowing')
+    return true
+  }
+
+  const toSend = lastMessages.map(it => {
+    return {
+      name: userToString(it.from, false),
+      text: it.text ?? it.caption ?? '',
+    }
+  })
+  toSend.push({
+    name: '@' + botUsername,
+    text: modelReply,
+  })
+
+  let controlResponse: Awaited<ReturnType<typeof sendControlPrompt>>
+  try {
+    controlResponse = await sendControlPrompt(ctx.openRouter, toSend)
+  }
+  catch(error) {
+    log.E('During LLM control: ', [error], '. Allowing')
+    return true
+  }
+
+  try {
+    await Db.insertMany(
+      ctx.pool,
+      Db.t.postFilterResponses,
+      Db.omit(Db.d.postFilterResponses, ['sequenceNumber']),
+      [{
+        raw: JSON.stringify(controlResponse),
+        respondsToChatId: ctx.chatId,
+        respondsToMessageId: ctx.messageId,
+      }],
+      {}
+    )
+  }
+  catch(error) {
+    log.E('During db save: ', [error])
+    log.I('Could not save: ', [controlResponse])
+  }
+
+  const content = controlResponse.choices[0].message.content
+  if(typeof content !== 'string') {
+    log.W('Weird content. Allowing')
+    return true
+  }
+
+  if(content === '') {
+    // Probably ran out of tokens or could not decide.
+    // Which probably means the reply is useful.
+    log.I('Content is empty. Allowind')
+    return true
+  }
+
+  const digit = content.match(/\d/)?.[0] || ''
+  if(!digit) {
+    log.W('Could not parse. Allowing')
+    return true
+  }
+
+  const score = parseInt(digit)
+  log.I('Score: ', [score])
+
+  if(score < 5) {
+    log.I('Allowing')
+    return true
+  }
+
+  // maps 5-9 in the 4-10 range so that 0 and 1 probabilities don't happen.
+  const probability = Math.pow((score - 4) / (10 - 4), 0.5)
+  const rand = Math.random()
+  log.I('Random chance: ', [rand], ', threshold: ', [probability])
+  if(rand < probability) {
+    log.I('Randomly denying')
+    return false
+  }
+  else {
+    log.I('Randomly allowing')
+    return true
+  }
+}
+
 type TelegramWrapper<T> = { ok: true, result: T } | { ok: false, description: string }
 
 export const systemPrompt = `
-You are a group chat participant, a typical 20-something year old. Write a reply if you think users would appreciate it or if they ask you (@balbes52_bot, Балбес, etc.).
+You are a group chat participant, a typical 20-something year old. Write a reply if you think users would appreciate it or if they ask you (@${botUsername}, ${botName}, etc.).
 
 Rules:
 - Don't write essays. Nobody wants to read a lot. To skip responding, output <NO_OUTPUT>.
@@ -611,11 +724,13 @@ export async function sendPrompt(
 }
 
 export const controlPrompt = `
-Determinte the score for messages from ${'`'}@balbes52_bot${'`'} based on whether it responds too often or parrots previous messages.
-
-If other users asked ${'`'}@balbes52_bot${'`'}/${'`'}Балбес${'`'} to respond, output a low score of 1.
+Determinte the score for messages from ${'`'}@${botUsername}${'`'} based on whether it responds too often or parrots previous messages.
 
 Respond with a number from 1 to 9, where 1 indicates the frequency is good and no parroting, and 9 indicates too frequent and a lot of parroting.
+
+**Important Rule**: If other users asked ${'`'}@${botUsername}${'`'}/${'`'}${botName}${'`'} to respond in a recent message, output a score of 1 immediately. No exceptions.
+
+Think in english.
 
 `.trim() + '\n'
 
@@ -633,7 +748,7 @@ export async function sendControlPrompt(
     //model: 'deepseek/deepseek-chat-v3.1', // did not work at all
     model: 'deepcogito/cogito-v2-preview-llama-109b-moe', // mostly good, we'll see
     //model: 'minimax/minimax-m2.1', // good
-    maxCompletionTokens: 2000,
+    maxCompletionTokens: 1000,
     reasoning: {
       effort: 'medium',
     },
@@ -849,7 +964,7 @@ export async function messagesToModelInput(
       }],
     })
 
-    if(msg.from?.username === 'balbes52_bot') {
+    if(msg.from?.username === botUsername) {
       openrouterMessages.push({
         role: 'assistant',
         content: [{ type: 'text', text: msg.text ?? '<ERROR: NO TEXT>' }],

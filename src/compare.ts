@@ -9,13 +9,18 @@ import type * as Types from './types.ts'
 import * as Logic from './logic.ts'
 import { OpenRouter } from '@openrouter/sdk'
 
+/*
 const chatId = -1002830050312
 const lastMessage = 4164 // keep
 //const lastMessage = 4183 // filter
+*/
 
 // Direct reply
 //const chatId = -1003381622274
 //const lastMessage = 209
+
+const chatId = 1720000708
+const lastMessage = 322
 
 const respond = false
 
@@ -28,7 +33,10 @@ const conn = await pool.connect()
 const openRouter = new OpenRouter({ apiKey: process.env.OPENROUTER_KEY! });
 
 try {
-  let messages = await Logic.fetchMessages(conn, log, chatId, { lastMessage, skipImages: true })
+  let messages = await Logic.fetchMessages(conn, log, chatId, {
+    lastMessage,
+    skipImages: true,
+  })
   //messages = messages.slice(messages.length - 20)
   debugPrint(messages)
 
@@ -43,21 +51,24 @@ try {
   */
 
   /*
-  let controlMessages =   messages.map(it => ({
+  let controlMessages = messages.map(it => ({
     name: Logic.userToString(it.msg.from, false),
     // it.msg.from?.username === 'balbes52_bot'
     //     ? 'Target User'
     //     : 'User ' + usernames.indexOf(Logic.userToString(it.msg.from, false)),
     text: it.msg.text ?? it.msg.caption ?? '',
   }))
-  controlMessages = controlMessages.slice(controlMessages.length - 10),
-  fs.writeFileSync('messages-keep.json', JSON.stringify(controlMessages))
+  controlMessages = controlMessages.slice(controlMessages.length - 9)
+  controlMessages.push({
+    name: '@balbes52_bot',
+    text: 'Здарова. Че как?',
+  })
+  fs.writeFileSync('messages.json', JSON.stringify(controlMessages))
   */
 
-  //const controlMessages = JSON.parse(fs.readFileSync('messages-filter.json').toString())
-  let controlMessages = JSON.parse(fs.readFileSync('messages-asked.json').toString())
-
+  let controlMessages = JSON.parse(fs.readFileSync('messages.json').toString())
   controlMessages = controlMessages.slice(controlMessages.length - 10)
+
   debugPrint(controlMessages)
 
   if(true) {

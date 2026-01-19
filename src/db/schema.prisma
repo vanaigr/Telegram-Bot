@@ -51,6 +51,13 @@ model responses {
     respondsToMessageId BigInt
 }
 
+model postFilterResponses {
+    sequenceNumber Int @id @default(autoincrement())
+    raw Json
+    respondsToChatId BigInt
+    respondsToMessageId BigInt
+}
+
 model chatFullInfo {
     id BigInt @id
     updatedAt DateTime @db.Timestamp(6)
