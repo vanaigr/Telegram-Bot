@@ -238,7 +238,7 @@ export async function downloadPhoto(
 
 export async function reply(
   pool: Db.DbPool,
-  conn: Db.DbTransaction,
+  forLock: Db.DbTransaction,
   log: L.Log,
   messageDate: T.Instant,
   chatId: number,
@@ -259,13 +259,13 @@ export async function reply(
     const lockId = BigInt(chatId)
 
     const lock = Db.t.chatLocks
-    await Db.queryRaw(conn, 'set lock_timeout = ' + waitFor)
-    await Db.queryRaw(conn,
+    await Db.queryRaw(forLock, 'set lock_timeout = ' + waitFor)
+    await Db.queryRaw(forLock,
       'insert into', lock, Db.args([lock.id.nameOnly]),
       'values', Db.args([Db.param(lockId)]),
       'on conflict', Db.args([lock.id.nameOnly]), 'do nothing',
     )
-    await Db.queryRaw(conn,
+    await Db.queryRaw(forLock,
       'select', [lock.id],
       'from', lock,
       'where', Db.eq(lock.id, Db.param(lockId)),
@@ -284,7 +284,7 @@ export async function reply(
   log.I('Locked ', [chatId])
   // Lock aquired - no new replies will be inserted.
 
-  const firstLatest = await Db.query(conn,
+  const firstLatest = await Db.query(pool,
     'select', [
       Db.t.messages.messageId,
       Db.t.messages.raw,
@@ -342,7 +342,7 @@ export async function reply(
     }
 
     const t = Db.t.photos
-    const totalLoading = await Db.query(conn,
+    const totalLoading = await Db.query(pool,
       'select', [
         Db.named(
           'totalLoading',
@@ -368,7 +368,7 @@ export async function reply(
   }
 
   const messages = await(async() => {
-    const messages = await fetchMessages(conn, log, chatId)
+    const messages = await fetchMessages(pool, log, chatId)
     return messages.slice(messages.length - 30)
   })()
 
@@ -397,7 +397,7 @@ export async function reply(
     log.I('Responded')
 
     await Db.insertMany(
-      conn,
+      pool,
       Db.t.responses,
       Db.omit(Db.d.responses, ['sequenceNumber']),
       [{
@@ -517,7 +517,7 @@ export async function reply(
 
     log.I('Inserting response')
     await Db.insertMany(
-      conn,
+      pool,
       Db.t.messages,
       Db.d.messages,
       [{
@@ -535,7 +535,7 @@ export async function reply(
 
   const dbReactionsP = (async() => {
     const now = Math.floor(T.Now.instant().epochMilliseconds / 1000)
-    await updateReactionRows(conn, reactions.map(it => {
+    await updateReactionRows(pool, reactions.map(it => {
       return {
         chatId,
         messageId: it.messageId,
@@ -804,7 +804,7 @@ type MessageWithAttachments = {
 }
 
 export async function fetchMessages(
-  conn: Db.DbTransaction,
+  conn: Db.DbConnOrPool,
   log: L.Log,
   chatId: number,
   ctx?: { lastMessage?: number, skipImages?: boolean }
