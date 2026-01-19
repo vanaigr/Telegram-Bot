@@ -92,6 +92,7 @@ model chatLocks {
 // separate from chats since how will you add a chat otherwise?
 model chatWhitelist {
     id BigInt @id
+    enabled Boolean @default(true)
 }
 
 model debug {

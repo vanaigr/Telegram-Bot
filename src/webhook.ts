@@ -45,8 +45,8 @@ async function handleReaction(log: L.Log, reaction: Types.MessageReactionUpdated
   }
   attachDatabasePool(pool)
 
-  const whitelistResponse = await handleWhitelisted(pool, log, reaction.chat.id)
-  if(whitelistResponse) return whitelistResponse
+  const whitelistInfo = await getChatWhitelistInfo(pool, log, reaction.chat.id)
+  if(whitelistInfo === undefined) return new Response()
 
   let hash: string
   if(reaction.user) {
@@ -83,8 +83,46 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
   }
   attachDatabasePool(pool)
 
-  const whitelistResponse = await handleWhitelisted(pool, log, message.chat.id)
-  if(whitelistResponse) return whitelistResponse
+  const whitelistInfo = await getChatWhitelistInfo(pool, log, message.chat.id)
+  if(whitelistInfo === undefined) return new Response()
+
+  // NOTE: also for edits. Is that good?
+  if(message.text?.startsWith('/start')) {
+    log.I('Received start command')
+
+    const t = Db.t.chatWhitelist
+    await Db.queryRaw(pool,
+      'update', t,
+      'set', Db.set(t.enabled, Db.param(true)),
+      'where', Db.eq(t.id, Db.param(BigInt(message.chat.id))),
+    )
+
+    const emojis = ['👍', '😇', '😍', '😜', '😭', '🤞', '🤡', '🤢', '🤰']
+    const text = 'Бот воскрешен '
+      + emojis[Math.floor(Math.random() * emojis.length)]
+      + '. /stop чтобы выключить'
+
+    await Logic.sendMessage(message.chat.id, text, log)
+    return new Response()
+  }
+  else if(message.text?.startsWith('/stop')) {
+    log.I('Received stop command')
+
+    const t = Db.t.chatWhitelist
+    await Db.queryRaw(pool,
+      'update', t,
+      'set', Db.set(t.enabled, Db.param(false)),
+      'where', Db.eq(t.id, Db.param(BigInt(message.chat.id))),
+    )
+
+    const emojis = ['👍', '😌', '😇', '😈', '🗿', '😓', '🙂', '☠', '💀', '⚰️']
+    const text = 'Бот убит '
+      + emojis[Math.floor(Math.random() * emojis.length)]
+      + '. /start чтобы включить'
+
+    await Logic.sendMessage(message.chat.id, text, log)
+    return new Response()
+  }
 
   await Db.timedTran(pool, async(db) => {
     const dst = Db.t.messages
@@ -127,11 +165,17 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
 
   await Logic.startPhotoTask(pool, log, message.chat.id, message.photo?.at(-1))
 
-  const botEnabled = process.env.BOT_ENABLED === 'true' || process.env.BOT_ENABLED === '1'
+  const botEnabled = process.env.BOT_ENABLED === 'true'
+    || process.env.BOT_ENABLED === '1'
+
   const replyTask = (async() => {
     const l = log.addedCtx('reply')
     if(!botEnabled) {
-      log.I('Bot is disabled')
+      log.I('Bot is globally disabled')
+      return
+    }
+    if(!whitelistInfo.enabled) {
+      log.I('Bot in chat is disabled')
       return
     }
     if(edit) {
@@ -155,8 +199,10 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
     catch(error) {
       l.E([error])
       if(!completion.sent) {
-        const emojis = ['🙂', '💀', '☠']
-        const text = 'Бот шандарахнулся ' + emojis[Math.floor(Math.random() * emojis.length)]
+        const emojis = ['🙂', '💀', '☠', '😂', '🗿', '😨', '😬', '😭']
+        const text = 'Бот шандарахнулся '
+          + emojis[Math.floor(Math.random() * emojis.length)]
+          + '. /stop чтобы выключить'
         await Logic.sendMessage(message.chat.id, text, log)
       }
     }
@@ -166,20 +212,22 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
   return new Response(JSON.stringify({}))
 }
 
-async function handleWhitelisted(pool: Db.DbPool, log: L.Log, chatId: number) {
-  const whitelisted = await Db.query(pool,
-    'select', [Db.t.chatWhitelist.id],
+async function getChatWhitelistInfo(pool: Db.DbPool, log: L.Log, chatId: number) {
+  const whitelistInfo = await Db.query(pool,
+    'select', [Db.t.chatWhitelist.id, Db.t.chatWhitelist.enabled],
     'from', Db.t.chatWhitelist,
     'where', Db.eq(Db.t.chatWhitelist.id, Db.param(BigInt(chatId))),
-  ).then(it => it.at(0)?.id !== undefined)
+  ).then(it => it.at(0))
 
-  if(!whitelisted) {
+  if(whitelistInfo === undefined) {
     log.W('Chat ', [chatId], ' is not whitelisted')
 
     const emojis = ['🙂', '😳', '👉👈', '😡']
     const text = 'А вы кто ' + emojis[Math.floor(Math.random() * emojis.length)] + '?'
     await Logic.sendMessage(chatId, text, log)
 
-    return new Response(JSON.stringify({}))
+    return undefined
   }
+
+  return whitelistInfo
 }
