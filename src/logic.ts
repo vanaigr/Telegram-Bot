@@ -560,12 +560,8 @@ export const systemPrompt = `
 You are a group chat participant, a typical 20-something year old. Write a reply if you think users would appreciate it or if they ask you (@balbes52_bot, Балбес, etc.).
 
 Rules:
-- Don't write essays. Nobody wants to read a lot.
+- Don't write essays. Nobody wants to read a lot. To skip responding, output <NO_OUTPUT>.
 - If you can capture your response as a single emoji, use 'message_reaction' tool. If you think a reaction is enough, use 'message_reaction' tool and respond with <NO_OUTPUT> together to only do a reaction.
-
-**Important rule:**
-- Consider whether the users want your input. If they don’t, or if they're talking among themselves, respond with <NO_OUTPUT>.
-
 `.trim() + '\n'
 
 export async function sendPrompt(
@@ -610,6 +606,60 @@ export async function sendPrompt(
     messages: [
       { role: 'system', content: systemPrompt },
       ...messages,
+    ],
+  })
+}
+
+export const controlPrompt = `
+Determinte the score for messages from ${'`'}@balbes52_bot${'`'} based on whether it responds too often or parrots previous messages.
+
+If other users asked ${'`'}@balbes52_bot${'`'}/${'`'}Балбес${'`'} to respond, output a low score of 1.
+
+Respond with a number from 1 to 9, where 1 indicates the frequency is good and no parroting, and 9 indicates too frequent and a lot of parroting.
+
+`.trim() + '\n'
+
+  /*
+export const controlPrompt = `
+Determine if the last message fits any of the following criteria:
+- Doesn't add much to the conversation. Parrots previous messages.
+- User responds to almost every message
+
+E.g. responds with fluff and agreement.
+
+If the last message meets any criteria, output ${'`'}true${'`'}, otherwise output ${'`'}false${`'`}.
+`.trim() + '\n'
+*/
+
+export async function sendControlPrompt(
+  openRouter: OpenRouter,
+  messages: { name: string, text: string }[],
+) {
+  return await openRouter.chat.send({
+    //model: 'openai/gpt-5-mini', // слишком стерильный
+    //model: 'openai/chatgpt-4o-latest', // тоже наверно
+    //model: 'x-ai/grok-4.1-fast', // not super coherent
+    model: 'minimax/minimax-m2.1',
+    //model: 'google/gemini-2.5-flash-lite',
+    //model: 'google/gemini-3-flash-preview',
+    //model: 'moonshotai/kimi-k2-0905',
+    //model: 'moonshotai/kimi-k2-thinking',
+    //model: 'openai/gpt-oss-120b', // explodes
+    provider: {
+      dataCollection: 'deny',
+    },
+    stream: false,
+    messages: [
+      { role: 'system', content: controlPrompt },
+      ...messages.map(message => {
+        return {
+          role: 'user' as const,
+          content: [{
+            type: 'text' as const,
+            text: 'User: ' + message.name + '\nText: ' + message.text.trim() + '\n\n',
+          }],
+        }
+      }),
     ],
   })
 }
@@ -1005,7 +1055,8 @@ export function messageHeaders(
     headers.sender = userToString(msg.from, true)
   }
   else {
-    headers.sender = userToString(adminUser, true)
+    // Never seen this field missing.
+    headers.sender = userToString(undefined, true)
   }
 
   headers.at = dateToString(fromMessageDate(msg.date))
@@ -1025,7 +1076,8 @@ export function messageHeaders(
         name = userToString(reaction.user, false)
       }
       else {
-        name = userToString(adminUser, false)
+        // reaction.actor_chat is not null, but that is the same as admin
+        name = userToString(undefined, false)
       }
 
       reactionsObj[name] = result.join('')
@@ -1047,8 +1099,12 @@ export function messageText(msg: Types.Message) {
   return (msg.text ?? msg.caption ?? '<no message>').trim()
 }
 
-function userToString(user: Types.User, full: boolean) {
-  if(user.username === 'GroupAnonymousBot' || user.username === undefined) {
+export function userToString(user: Types.User | undefined, full: boolean) {
+  if(
+    user === undefined
+      || user.username === undefined // telegram channel repost
+      || user.username === 'GroupAnonymousBot' // channel admin
+  ) {
     return 'God User'
   }
   if(full) {
@@ -1093,9 +1149,3 @@ function startTypingTask(chatId: number, log: L.Log) {
 }
 
 const validEmojis = ["❤", "👍", "👎", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱", "🤬", "😢", "🎉", "🤩", "🤮", "💩", "🙏", "👌", "🕊", "🤡", "🥱", "🥴", "😍", "🐳", "❤‍🔥", "🌚", "🌭", "💯", "🤣", "⚡", "🍌", "🏆", "💔", "🤨", "😐", "🍓", "🍾", "💋", "🖕", "😈", "😴", "😭", "🤓", "👻", "👨‍💻", "👀", "🎃", "🙈", "😇", "😨", "🤝", "✍", "🤗", "🫡", "🎅", "🎄", "☃", "💅", "🤪", "🗿", "🆒", "💘", "🙉", "🦄", "😘", "💊", "🙊", "😎", "👾", "🤷‍♂", "🤷", "🤷‍♀", "😡"]
-
-const adminUser: Types.User = {
-  id: -1,
-  username: "GroupAnonymousBot",
-  first_name: "Group"
-}

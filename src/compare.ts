@@ -1,4 +1,5 @@
 import 'dotenv/config'
+import fs from 'node:fs'
 import util from 'node:util'
 import * as DbClient from './db/client.ts'
 import * as Db from './db/index.ts'
@@ -8,8 +9,16 @@ import type * as Types from './types.ts'
 import * as Logic from './logic.ts'
 import { OpenRouter } from '@openrouter/sdk'
 
+/*
 const chatId = -1002830050312
-const lastMessage = 4191
+const lastMessage = 4164 // keep
+//const lastMessage = 4183 // filter
+*/
+
+// Direct reply
+const chatId = -1003381622274
+const lastMessage = 209
+
 const respond = false
 
 const log = L.makeLogger(undefined, undefined)
@@ -23,16 +32,43 @@ const openRouter = new OpenRouter({ apiKey: process.env.OPENROUTER_KEY! });
 try {
   let messages = await Logic.fetchMessages(conn, log, chatId, { lastMessage, skipImages: true })
   //messages = messages.slice(messages.length - 20)
+  debugPrint(messages)
 
+  /*
   const openrouterMessages = await Logic.messagesToModelInput({
     messages,
     chatInfo: (await Logic.getChatDataFromDb(conn, chatId))!.raw,
     log,
     caching: false,
   })
-
   debugPrint(openrouterMessages)
+  */
 
+  /*
+  const controlMessages =   messages.map(it => ({
+    name: Logic.userToString(it.msg.from, false),
+    // it.msg.from?.username === 'balbes52_bot'
+    //     ? 'Target User'
+    //     : 'User ' + usernames.indexOf(Logic.userToString(it.msg.from, false)),
+    text: it.msg.text ?? it.msg.caption ?? '',
+  }))
+  */
+  //fs.writeFileSync('messages.json', JSON.stringify(controlMessages))
+
+  const controlMessages = JSON.parse(fs.readFileSync('messages.json').toString())
+
+  debugPrint(controlMessages)
+
+  if(true) {
+    const controlResponse = await Logic.sendControlPrompt(
+      openRouter,
+      controlMessages.slice(controlMessages.length - 10),
+    )
+    debugPrint(controlResponse)
+    await debugSave({ chatId, lastMessage, controlResponse })
+  }
+
+  /*
   if(respond) {
     let response: any
     try {
@@ -51,22 +87,24 @@ try {
 
     await debugSave({ chatId, lastMessage, response })
   }
-
-  conn.release()
-  await pool.end()
+  */
 }
 catch(error) {
   console.error(error)
 }
 
-  function debugPrint(value: unknown) {
-    console.log(util.inspect(value, { depth: Infinity, maxArrayLength: Infinity }))
-  }
-  async function debugSave(value: unknown) {
-    const t = Db.t.debug
-    await Db.queryRaw(pool!,
-      'insert into', t, Db.args([t.raw.nameOnly]),
-      'values', Db.args([Db.param(JSON.stringify(value))]),
-    )
-  }
+  conn.release()
+  await pool.end()
+
+function debugPrint(value: unknown) {
+  console.log(util.inspect(value, { depth: Infinity, maxArrayLength: Infinity }))
+}
+
+async function debugSave(value: unknown) {
+  const t = Db.t.debug
+  await Db.queryRaw(pool!,
+    'insert into', t, Db.args([t.raw.nameOnly]),
+    'values', Db.args([Db.param(JSON.stringify(value))]),
+  )
+}
 
