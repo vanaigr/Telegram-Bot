@@ -9,15 +9,13 @@ import type * as Types from './types.ts'
 import * as Logic from './logic.ts'
 import { OpenRouter } from '@openrouter/sdk'
 
-/*
 const chatId = -1002830050312
 const lastMessage = 4164 // keep
 //const lastMessage = 4183 // filter
-*/
 
 // Direct reply
-const chatId = -1003381622274
-const lastMessage = 209
+//const chatId = -1003381622274
+//const lastMessage = 209
 
 const respond = false
 
@@ -45,25 +43,25 @@ try {
   */
 
   /*
-  const controlMessages =   messages.map(it => ({
+  let controlMessages =   messages.map(it => ({
     name: Logic.userToString(it.msg.from, false),
     // it.msg.from?.username === 'balbes52_bot'
     //     ? 'Target User'
     //     : 'User ' + usernames.indexOf(Logic.userToString(it.msg.from, false)),
     text: it.msg.text ?? it.msg.caption ?? '',
   }))
+  controlMessages = controlMessages.slice(controlMessages.length - 10),
+  fs.writeFileSync('messages-keep.json', JSON.stringify(controlMessages))
   */
-  //fs.writeFileSync('messages.json', JSON.stringify(controlMessages))
 
-  const controlMessages = JSON.parse(fs.readFileSync('messages.json').toString())
+  //const controlMessages = JSON.parse(fs.readFileSync('messages-filter.json').toString())
+  let controlMessages = JSON.parse(fs.readFileSync('messages-asked.json').toString())
 
+  controlMessages = controlMessages.slice(controlMessages.length - 10)
   debugPrint(controlMessages)
 
   if(true) {
-    const controlResponse = await Logic.sendControlPrompt(
-      openRouter,
-      controlMessages.slice(controlMessages.length - 10),
-    )
+    const controlResponse = await Logic.sendControlPrompt(openRouter, controlMessages)
     debugPrint(controlResponse)
     await debugSave({ chatId, lastMessage, controlResponse })
   }

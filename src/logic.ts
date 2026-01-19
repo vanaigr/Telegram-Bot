@@ -619,32 +619,24 @@ Respond with a number from 1 to 9, where 1 indicates the frequency is good and n
 
 `.trim() + '\n'
 
-  /*
-export const controlPrompt = `
-Determine if the last message fits any of the following criteria:
-- Doesn't add much to the conversation. Parrots previous messages.
-- User responds to almost every message
-
-E.g. responds with fluff and agreement.
-
-If the last message meets any criteria, output ${'`'}true${'`'}, otherwise output ${'`'}false${`'`}.
-`.trim() + '\n'
-*/
-
 export async function sendControlPrompt(
   openRouter: OpenRouter,
   messages: { name: string, text: string }[],
 ) {
   return await openRouter.chat.send({
-    //model: 'openai/gpt-5-mini', // слишком стерильный
-    //model: 'openai/chatgpt-4o-latest', // тоже наверно
-    //model: 'x-ai/grok-4.1-fast', // not super coherent
-    model: 'minimax/minimax-m2.1',
-    //model: 'google/gemini-2.5-flash-lite',
-    //model: 'google/gemini-3-flash-preview',
-    //model: 'moonshotai/kimi-k2-0905',
-    //model: 'moonshotai/kimi-k2-thinking',
-    //model: 'openai/gpt-oss-120b', // explodes
+    //model: 'allenai/olmo-3-7b-think', // did not work at all
+    // model: 'nvidia/llama-3.3-nemotron-super-49b-v1.5', // token hungry
+    //model: 'google/gemini-2.5-flash-lite-preview-09-2025', // wrong, latency
+    //model: 'google/gemini-2.5-flash-lite', // wrong, latency
+    //model: 'nousresearch/hermes-4-70b', // wrong
+    //model: 'qwen/qwen3-235b-a22b-thinking-2507', // did not work at all
+    //model: 'deepseek/deepseek-chat-v3.1', // did not work at all
+    model: 'deepcogito/cogito-v2-preview-llama-109b-moe', // mostly good, we'll see
+    //model: 'minimax/minimax-m2.1', // good
+    maxCompletionTokens: 2000,
+    reasoning: {
+      effort: 'medium',
+    },
     provider: {
       dataCollection: 'deny',
     },
