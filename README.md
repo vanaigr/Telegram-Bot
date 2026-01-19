@@ -1,4 +1,4 @@
-A Telegram bot that spices up group chats with fun, witty replies. It can read conversation history, see image attachments and add reactions.
+A Telegram bot that spices up group chats with fun, witty replies. It can read conversation history, see image attachments, add reactions and even search.
 
 The bot uses OpenRouter to generate responses and is deployed on Vercel (serverless functions) + Prisma (postgres).
 

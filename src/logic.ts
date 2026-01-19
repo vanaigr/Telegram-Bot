@@ -381,6 +381,7 @@ export async function reply(
     caching: true,
   })
 
+  let forceSend = false
   let reply: string | undefined
   let reactionsToSend: { emoji: string, messageId: number, shortExplanation: string }[] = []
   const openRouter = new OpenRouter({ apiKey: process.env.OPENROUTER_KEY! });
@@ -412,9 +413,10 @@ export async function reply(
     if(finishReason === 'tool_calls') {
       openrouterMessages.push(response.choices[0].message)
 
-      const results = response.choices[0].message.toolCalls!.map((tool) => {
+      const results = await Promise.all(response.choices[0].message.toolCalls!.map(async(tool, i) => {
         const args = JSON.parse(tool.function.arguments)
-        log.I('Tool call ', tool.function.name, ' with ', [args])
+        const l = log.addedCtx('tool ', [i])
+        l.I('Function ', tool.function.name, ' with ', [args])
 
         if(tool.function.name === 'message_reaction') {
           let { emoji, messageId: messageIdRaw, shortExplanation } = args
@@ -432,7 +434,7 @@ export async function reply(
               }
             }
             else {
-              log.W('Tried to output ', [emoji], ' but it is not allowed')
+              l.W('Tried to output ', [emoji], ' but it is not allowed')
               return {
                 role: 'tool' as const,
                 toolCallId: tool.id,
@@ -441,7 +443,7 @@ export async function reply(
             }
           }
           else {
-            log.W('Malformed reaction')
+            l.W('Malformed reaction')
             // Don't bother it
             return {
               role: 'tool' as const,
@@ -450,15 +452,80 @@ export async function reply(
             }
           }
         }
+        else if(tool.function.name === 'search') {
+          try {
+            l.I('Searching')
+
+            const searchResult = await openRouter.chat.send({
+              model: 'openai/gpt-5-nano',
+              plugins: [
+                {
+                  id: "web",
+                  maxResults: 3,
+                  searchPrompt: '',
+                },
+              ],
+              messages: [
+                {
+                  role: 'system',
+                  content: 'You need to perform a search and repeat the search results as-is. Search queries are given below',
+                },
+                {
+                  role: 'user',
+                  content: tool.function.arguments,
+                },
+              ],
+            })
+            l.I('Done searching')
+
+            await Db.insertMany(
+              pool,
+              Db.t.responses,
+              Db.omit(Db.d.responses, ['sequenceNumber']),
+              [{
+                respondsToChatId: chatId,
+                respondsToMessageId,
+                raw: JSON.stringify(searchResult),
+              }],
+              {},
+            )
+
+            const content = searchResult.choices[0].message.content
+            if(typeof content === 'string') {
+              forceSend = true
+              return {
+                role: 'tool' as const,
+                toolCallId: tool.id,
+                content,
+              }
+            }
+            else {
+              l.I('Weird content')
+              return {
+                role: 'tool' as const,
+                toolCallId: tool.id,
+                content: 'Error: could not parse content',
+              }
+            }
+          }
+          catch(error) {
+            l.E('Search failed: ', [error])
+            return {
+              role: 'tool' as const,
+              toolCallId: tool.id,
+              content: 'Error: ' + (('' + error).split('\n')[0] ?? 'unknown'),
+            }
+          }
+        }
         else {
-          log.W('Unknown tool ', [tool])
+          l.W('Unknown tool ', [tool])
           return {
             role: 'tool' as const,
             toolCallId: tool.id,
             content: 'Error: unknown tool',
           }
         }
-      })
+      }))
 
       for(const result of results) openrouterMessages.push(result)
     }
@@ -496,12 +563,17 @@ export async function reply(
       return
     }
 
-    const isUseful = await evaluateIsUseful(
-      messages.slice(messages.length - 9).map(it => it.msg),
-      reply,
-      { pool, openRouter, log, chatId, messageId: respondsToMessageId },
-    )
-    if(!isUseful) return
+    if(!forceSend) {
+      const isUseful = await evaluateIsUseful(
+        messages.slice(messages.length - 9).map(it => it.msg),
+        reply,
+        { pool, openRouter, log, chatId, messageId: respondsToMessageId },
+      )
+      if(!isUseful) return
+    }
+    else {
+      log.I('Force sending')
+    }
 
     log.I('Sending response')
     const responseResult = await sendMessage(chatId, reply, log)
@@ -716,6 +788,25 @@ export async function sendPrompt(
           }
         },
       },
+      {
+        type: 'function',
+        function: {
+          name: 'search',
+          description: 'Perform Search. **Important**: Will fail without express user consent "yes, search". Request before use, warn that search is expensive',
+          parameters: {
+            type: "object",
+            properties: {
+              queries: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+            },
+            required: ["queries"],
+          },
+        },
+      }
     ],
     stream: false,
     messages: [
