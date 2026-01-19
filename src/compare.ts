@@ -19,8 +19,8 @@ const lastMessage = 4164 // keep
 //const chatId = -1003381622274
 //const lastMessage = 209
 
-const chatId = 1720000708
-const lastMessage = 322
+let chatId = 1720000708
+let lastMessage = 322
 
 const respond = false
 

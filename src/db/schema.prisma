@@ -29,6 +29,7 @@ model reactions {
     hash String
 
     raw Json
+    reason String @default("") // bot-only
 
     @@id([chatId, messageId, hash])
 }

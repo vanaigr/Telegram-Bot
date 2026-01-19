@@ -85,6 +85,7 @@ export const tables = {
         "messageId": t_bigint,
         "hash": t_text,
         "raw": t_json,
+        "reason": t_text,
     },
     "messagesBackup": {
         "sequenceNumber": t_integer,

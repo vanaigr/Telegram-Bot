@@ -67,6 +67,7 @@ async function handleReaction(log: L.Log, reaction: Types.MessageReactionUpdated
     messageId: reaction.message_id,
     hash,
     raw: JSON.stringify(reaction),
+    reason: '',
   }])
 
   log.I('done')

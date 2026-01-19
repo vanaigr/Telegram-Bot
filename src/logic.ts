@@ -382,7 +382,7 @@ export async function reply(
   })
 
   let reply: string | undefined
-  let reactionsToSend: { emoji: string, messageId: number }[] = []
+  let reactionsToSend: { emoji: string, messageId: number, shortExplanation: string }[] = []
   const openRouter = new OpenRouter({ apiKey: process.env.OPENROUTER_KEY! });
   for(let iteration = 0;; iteration++) {
     if(iteration > 3) {
@@ -417,14 +417,14 @@ export async function reply(
         log.I('Tool call ', tool.function.name, ' with ', [args])
 
         if(tool.function.name === 'message_reaction') {
-          let { emoji, messageId: messageIdRaw } = args
+          let { emoji, messageId: messageIdRaw, shortExplanation } = args
 
           const messageId = parseInt(messageIdRaw)
           if(isFinite(messageId)) {
             if(emoji === '😂') emoji = '🤣'
 
             if(validEmojis.includes(emoji)) {
-              reactionsToSend.push({ emoji, messageId })
+              reactionsToSend.push({ emoji, messageId, shortExplanation })
               return {
                 role: 'tool' as const,
                 toolCallId: tool.id,
@@ -551,6 +551,7 @@ export async function reply(
           },
           new_reaction: [{ type: 'emoji', emoji: it.emoji }],
         } satisfies Types.MessageReactionUpdated),
+        reason: it.shortExplanation ?? '',
       }
     }))
   })()
@@ -702,13 +703,14 @@ export async function sendPrompt(
         type: 'function',
         function: {
           name: 'message_reaction',
-          description: 'Adds an emoji reaction to a message',
+          description: 'Adds an emoji reaction to a message. Short explanation is for you',
           //description: 'Adds an emoji reaction to a message. Valid emojis: ' + validEmojis.join(''),
           parameters: {
             type: 'object',
             properties: {
-              emoji: { type: 'string' },
               messageId: { type: 'string' },
+              emoji: { type: 'string' },
+              shortExplanation: { type: 'string' },
             },
             required: ['emoji', 'messageId'],
           }
@@ -788,10 +790,14 @@ type VideoNote = {
   info: Types.VideoNote
   thumbnail: Photo | undefined
 }
+type Reaction = {
+  info: Types.MessageReactionUpdated
+  reason: string
+}
 
 type MessageWithAttachments = {
   msg: Types.Message
-  reactions: Types.MessageReactionUpdated[]
+  reactions: Reaction[]
   photos: Photo[]
   video: Video | undefined
   videoNote: VideoNote | undefined
@@ -811,7 +817,10 @@ export async function fetchMessages(
         'reactions',
         Db.scalar<typeof Db.dbTypes.jsonArray>(Db.par(
           'select', Db.func('array_agg', [
-            Db.t.reactions.raw, 'order by', Db.t.reactions.hash,
+            Db.func('jsonb_build_object',
+              '\'raw\'', Db.t.reactions.raw,
+              '\'reason\'', Db.t.reactions.reason,
+            ), 'order by', Db.t.reactions.hash,
           ]),
           'from', Db.t.reactions,
           'where', Db.eq(Db.t.reactions.chatId, t.chatId),
@@ -832,7 +841,12 @@ export async function fetchMessages(
   const messages = messagesRaw.map(({ raw: msg, reactions }) => {
     return {
       msg,
-      reactions: reactions as Types.MessageReactionUpdated[],
+      reactions: (reactions ?? []).map((it: any) => {
+        return {
+          info: it.raw as Types.MessageReactionUpdated,
+          reason: it.reason as string,
+        }
+      }),
       photos: ((): Photo[] => {
         const photo = msg.photo?.at(-1)
         if(!photo) return []
@@ -1262,7 +1276,7 @@ export function fromMessageDate(messageDate: number) {
 
 export function messageHeaders(
   msg: Types.Message,
-  reactions: Types.MessageReactionUpdated[] | undefined
+  reactions: Reaction[] | undefined
 ) {
   const headers: Record<string, unknown> = {}
   headers.messageId = msg.message_id
@@ -1280,22 +1294,24 @@ export function messageHeaders(
     const reactionsObj: Record<string, unknown> = {}
 
     for(const reaction of reactions) {
-      const result: string[] = []
-      for(const point of reaction.new_reaction) {
-        if(point.type === 'emoji') result.push(point.emoji)
+      const emojis: string[] = []
+      for(const point of reaction.info.new_reaction) {
+        if(point.type === 'emoji') emojis.push(point.emoji)
       }
-      if(result.length === 0) continue
+      if(emojis.length === 0) continue
 
       let name: string
-      if(reaction.user) {
-        name = userToString(reaction.user, false)
+      if(reaction.info.user) {
+        name = userToString(reaction.info.user, false)
       }
       else {
         // reaction.actor_chat is not null, but that is the same as admin
         name = userToString(undefined, false)
       }
 
-      reactionsObj[name] = result.join('')
+      let result = emojis.join('')
+      if(reaction.reason) result += ' - ' + reaction.reason
+      reactionsObj[name] = result
     }
 
     if(Object.keys(reactionsObj).length > 0) {
