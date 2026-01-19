@@ -19,8 +19,9 @@ const lastMessage = 4164 // keep
 //const chatId = -1003381622274
 //const lastMessage = 209
 
-let chatId = 1720000708
-let lastMessage = 322
+const chatId = -1002830050312
+const lastMessage = 4216
+const reasoningToMessageId = lastMessage
 
 const respond = false
 
@@ -28,17 +29,51 @@ const log = L.makeLogger(undefined, undefined)
 
 const pool = DbClient.create(log)
 if(!pool) throw new Error()
-const conn = await pool.connect()
 
 const openRouter = new OpenRouter({ apiKey: process.env.OPENROUTER_KEY! });
 
 try {
-  let messages = await Logic.fetchMessages(conn, log, chatId, {
+  let messages = await Logic.fetchMessages(pool, log, chatId, {
     lastMessage,
     skipImages: true,
   })
   //messages = messages.slice(messages.length - 20)
   debugPrint(messages)
+
+  const reasoningObj = await Db.query(pool,
+    'select', [Db.t.responses.raw],
+    'from', Db.t.responses,
+    'where', Db.eq(Db.t.responses.respondsToChatId, Db.param(BigInt(chatId))),
+    'and', Db.eq(
+      Db.t.responses.respondsToMessageId,
+      Db.param(BigInt(reasoningToMessageId))
+    ),
+    'order by', Db.t.responses.sequenceNumber, 'asc',
+    'limit 1',
+  ).then(it => it[0].raw)
+
+  messages = messages.slice(messages.length - 10)
+
+  const checkMessages = messages.map(it => {
+    return {
+      name: Logic.userToString(it.msg.from, false),
+      text: it.msg.text ?? it.msg.caption ?? '',
+    }
+  })
+
+  const reasoningMessage = (reasoningObj as any).choices[0].message
+  const reasoning = (reasoningMessage.reasoning || reasoningMessage.content) as string
+
+  debugPrint(checkMessages)
+  debugPrint(reasoning)
+
+  const response = await Logic.sendNonsenseCheckPrompt(
+    openRouter,
+    checkMessages,
+    reasoning,
+  )
+  debugPrint(response)
+  await debugSave({ chatId, lastMessage, response })
 
   /*
   const openrouterMessages = await Logic.messagesToModelInput({
@@ -66,6 +101,7 @@ try {
   fs.writeFileSync('messages.json', JSON.stringify(controlMessages))
   */
 
+  /*
   let controlMessages = JSON.parse(fs.readFileSync('messages.json').toString())
   controlMessages = controlMessages.slice(controlMessages.length - 10)
 
@@ -76,6 +112,7 @@ try {
     debugPrint(controlResponse)
     await debugSave({ chatId, lastMessage, controlResponse })
   }
+  */
 
   /*
   if(respond) {
@@ -102,8 +139,7 @@ catch(error) {
   console.error(error)
 }
 
-  conn.release()
-  await pool.end()
+await pool.end()
 
 function debugPrint(value: unknown) {
   console.log(util.inspect(value, { depth: Infinity, maxArrayLength: Infinity }))

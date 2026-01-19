@@ -383,6 +383,7 @@ export async function reply(
 
   let forceSend = false
   let reply: string | undefined
+  let reasoning: string = ''
   let reactionsToSend: { emoji: string, messageId: number, shortExplanation: string }[] = []
   const openRouter = new OpenRouter({ apiKey: process.env.OPENROUTER_KEY! });
   for(let iteration = 0;; iteration++) {
@@ -396,6 +397,8 @@ export async function reply(
 
     const response = await sendPrompt(openRouter, openrouterMessages, systemPrompt)
     log.I('Responded')
+
+    if(!reasoning) reasoning = response.choices[0].message.reasoning ?? ''
 
     await Db.insertMany(
       pool,
@@ -550,26 +553,37 @@ export async function reply(
   cancelTypingStatus()
 
   const sendingP = (async() => {
-    const forTestingReply = reply.trim()
-    if(
-      forTestingReply === '<NO_OUTPUT>'
-        || forTestingReply === 'NO_OUTPUT'
-        || forTestingReply === '<>'
-        || forTestingReply === ''
-        || forTestingReply.length > 4000
-    ) {
+    // Sometimes it gets confused and outputs both a message and this.
+    reply = reply.replaceAll('<NO_OUTPUT>', '').trim()
+
+    if(reply === '' || reply === '<>' || reply.length > 4000) {
       log.I('Skipping response')
       completion.sent = true
       return
     }
 
     if(!forceSend) {
+      // NOTE: we need at least 1 message from the bot,
+      // and it's easier to wait until we have one for sure.
+      // It is also more strict this way, since the bot is clearly writing
+      // something, but outside observer still decides that his thoughts
+      // are not his.
+      const isAware = await evaluateIfAware(
+        messages.slice(messages.length - 9).map(it => it.msg),
+        reasoning,
+        reply,
+        { pool, openRouter, log, chatId, messageId: respondsToMessageId },
+      )
+      if(!isAware) return
+
+      /*
       const isUseful = await evaluateIsUseful(
         messages.slice(messages.length - 9).map(it => it.msg),
         reply,
         { pool, openRouter, log, chatId, messageId: respondsToMessageId },
       )
       if(!isUseful) return
+      */
     }
     else {
       log.I('Force sending')
@@ -640,6 +654,84 @@ export async function reply(
   log.I('Done responding')
 }
 
+type TelegramWrapper<T> = { ok: true, result: T } | { ok: false, description: string }
+
+export const systemPrompt = `
+You are a group chat participant, a typical 20-something year old. Write a reply if you think users would appreciate it or if they ask you (@${botUsername}, ${botName}, etc.).
+
+Rules:
+- Don't write essays. Nobody wants to read a lot. To skip responding, output <NO_OUTPUT>.
+- If you can capture your response as a single emoji, use 'message_reaction' tool. If you think a reaction is enough, use 'message_reaction' tool and respond with <NO_OUTPUT> together to only do a reaction.
+`.trim() + '\n'
+
+export async function sendPrompt(
+  openRouter: OpenRouter,
+  messages: OpenRouterMessage[],
+  systemPrompt: string,
+) {
+  return await openRouter.chat.send({
+    //model: 'openai/gpt-5-mini', // слишком стерильный
+    //model: 'openai/chatgpt-4o-latest', // тоже наверно
+    //model: 'x-ai/grok-4.1-fast', // not super coherent
+    //model: 'google/gemini-2.5-flash-lite',
+    model: 'google/gemini-3-flash-preview',
+    //model: 'moonshotai/kimi-k2-0905',
+    //model: 'moonshotai/kimi-k2-thinking',
+    //model: 'openai/gpt-oss-120b', // explodes
+    provider: {
+      dataCollection: 'deny',
+    },
+    reasoning: {
+      effort: 'medium',
+    },
+    tools: [
+      {
+        type: 'function',
+        function: {
+          name: 'message_reaction',
+          description: 'Adds an emoji reaction to a message. Short explanation is for you',
+          //description: 'Adds an emoji reaction to a message. Valid emojis: ' + validEmojis.join(''),
+          parameters: {
+            type: 'object',
+            properties: {
+              messageId: { type: 'string' },
+              emoji: { type: 'string' },
+              shortExplanation: { type: 'string' },
+            },
+            required: ['emoji', 'messageId'],
+          }
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'search',
+          description: 'Perform Search. **Important**: Will fail without express user consent "yes, search". Request before use, warn that search is expensive',
+          parameters: {
+            type: "object",
+            properties: {
+              queries: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+            },
+            required: ["queries"],
+          },
+        },
+      }
+    ],
+    stream: false,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      ...messages,
+    ],
+  })
+}
+
+
+/*
 async function evaluateIsUseful(
   lastMessages: Types.Message[],
   modelReply: string,
@@ -740,82 +832,6 @@ async function evaluateIsUseful(
   }
 }
 
-type TelegramWrapper<T> = { ok: true, result: T } | { ok: false, description: string }
-
-export const systemPrompt = `
-You are a group chat participant, a typical 20-something year old. Write a reply if you think users would appreciate it or if they ask you (@${botUsername}, ${botName}, etc.).
-
-Rules:
-- Don't write essays. Nobody wants to read a lot. To skip responding, output <NO_OUTPUT>.
-- If you can capture your response as a single emoji, use 'message_reaction' tool. If you think a reaction is enough, use 'message_reaction' tool and respond with <NO_OUTPUT> together to only do a reaction.
-`.trim() + '\n'
-
-export async function sendPrompt(
-  openRouter: OpenRouter,
-  messages: OpenRouterMessage[],
-  systemPrompt: string,
-) {
-  return await openRouter.chat.send({
-    //model: 'openai/gpt-5-mini', // слишком стерильный
-    //model: 'openai/chatgpt-4o-latest', // тоже наверно
-    //model: 'x-ai/grok-4.1-fast', // not super coherent
-    //model: 'google/gemini-2.5-flash-lite',
-    model: 'google/gemini-3-flash-preview',
-    //model: 'moonshotai/kimi-k2-0905',
-    //model: 'moonshotai/kimi-k2-thinking',
-    //model: 'openai/gpt-oss-120b', // explodes
-    provider: {
-      dataCollection: 'deny',
-    },
-    reasoning: {
-      effort: 'medium',
-    },
-    tools: [
-      {
-        type: 'function',
-        function: {
-          name: 'message_reaction',
-          description: 'Adds an emoji reaction to a message. Short explanation is for you',
-          //description: 'Adds an emoji reaction to a message. Valid emojis: ' + validEmojis.join(''),
-          parameters: {
-            type: 'object',
-            properties: {
-              messageId: { type: 'string' },
-              emoji: { type: 'string' },
-              shortExplanation: { type: 'string' },
-            },
-            required: ['emoji', 'messageId'],
-          }
-        },
-      },
-      {
-        type: 'function',
-        function: {
-          name: 'search',
-          description: 'Perform Search. **Important**: Will fail without express user consent "yes, search". Request before use, warn that search is expensive',
-          parameters: {
-            type: "object",
-            properties: {
-              queries: {
-                type: "array",
-                items: {
-                  type: "string",
-                },
-              },
-            },
-            required: ["queries"],
-          },
-        },
-      }
-    ],
-    stream: false,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      ...messages,
-    ],
-  })
-}
-
 export const controlPrompt = `
 Determinte the score for messages from ${'`'}@${botUsername}${'`'} based on whether it responds too often or parrots previous messages.
 
@@ -860,6 +876,139 @@ export async function sendControlPrompt(
           }],
         }
       }),
+    ],
+  })
+}
+*/
+
+// Sometimes the model thinks it is one of the users.
+// This detects that and returns `false`.
+async function evaluateIfAware(
+  lastMessages: Types.Message[],
+  modelReasoning: string,
+  modelOutput: string,
+  ctx: {
+    openRouter: OpenRouter,
+    pool: Db.DbPool,
+    log: L.Log,
+    chatId: number,
+    messageId: number,
+  }
+) {
+  const log = ctx.log.addedCtx('nonsense filter')
+  log.I('Checking')
+
+  if(!modelReasoning) {
+    log.I('No reasoning. Allowing')
+    return true
+  }
+
+  const toSend = lastMessages.map(it => {
+    return {
+      name: userToString(it.from, false),
+      text: it.text ?? it.caption ?? '',
+    }
+  })
+  toSend.push({
+    name: '@' + botUsername,
+    text: modelOutput,
+  })
+
+  let controlResponse: Awaited<ReturnType<typeof sendNonsenseCheckPrompt>>
+  try {
+    controlResponse = await sendNonsenseCheckPrompt(ctx.openRouter, toSend, modelReasoning)
+  }
+  catch(error) {
+    log.E('During LLM control: ', [error], '. Allowing')
+    return true
+  }
+
+  try {
+    await Db.insertMany(
+      ctx.pool,
+      Db.t.responses,
+      Db.omit(Db.d.responses, ['sequenceNumber']),
+      [{
+        raw: JSON.stringify(controlResponse),
+        respondsToChatId: ctx.chatId,
+        respondsToMessageId: ctx.messageId,
+      }],
+      {}
+    )
+  }
+  catch(error) {
+    log.E('During db save: ', [error])
+    log.I('Could not save: ', [controlResponse])
+  }
+
+  let content = controlResponse.choices[0].message.content
+  if(typeof content !== 'string') {
+    log.W('Weird content. Allowing')
+    return true
+  }
+
+  if(content === '') {
+    // Probably ran out of tokens or could not decide.
+    // Which probably means the reply is useful.
+    log.I('Content is empty. Allowind')
+    return true
+  }
+
+  content = content.toLowerCase()
+
+  // Don't include bot username as part of your name :)
+  if(
+    content.includes(botUsername.toLowerCase())
+      || content.includes(botName.toLowerCase())
+  ) {
+    log.I('Contains username. Allowing')
+    return true
+  }
+
+  log.W('Model got confused. Denying')
+
+  return false
+}
+
+export async function sendNonsenseCheckPrompt(
+  openRouter: OpenRouter,
+  messages: { name: string, text: string }[], // includes model output
+  modelReasoning: string,
+) {
+  const prompt = `
+Below is an excerpt from a conversation between a group of users, along with a sample of reasoning provided by one of them. Identify which user the reasoning belongs to.
+
+Output Instructions:
+Return your answer strictly in valid JSON with the following structure:
+{"user":"<identifier of the user the reasoning belongs to>"}
+
+`.trim() + '\n'
+
+  return await openRouter.chat.send({
+    model: 'deepcogito/cogito-v2-preview-llama-109b-moe', // mostly good, we'll see
+    maxCompletionTokens: 1000,
+    reasoning: {
+      effort: 'medium',
+    },
+    provider: {
+      dataCollection: 'deny',
+    },
+    stream: false,
+    messages: [
+      { role: 'system', content: prompt },
+      { role: 'user', content: '**Messages**:\n"""\n' },
+      ...messages.map(message => {
+        return {
+          role: 'user' as const,
+          content: [{
+            type: 'text' as const,
+            text: 'User: ' + message.name + '\nText: ' + message.text.trim() + '\n\n',
+          }],
+        }
+      }),
+      { role: 'user', content: '"""\n**Reasoning**:\n"""\n' },
+      { role: 'user', content: modelReasoning },
+      { role: 'user', content: '\n"""' },
     ],
   })
 }
