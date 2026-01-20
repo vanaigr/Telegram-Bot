@@ -532,7 +532,7 @@ export async function reply(
 
       for(const result of results) openrouterMessages.push(result)
     }
-    else if(finishReason === 'stop') {
+    else if(finishReason === 'stop' || finishReason === 'length') {
       const content = response.choices[0].message.content
       if(typeof content === 'string') {
         reply = content
