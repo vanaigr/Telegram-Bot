@@ -1279,7 +1279,7 @@ export async function messagesToModelInput(
       role: 'system',
       content: [{
         type: 'text',
-        text: JSON.stringify(messageHeaders(msg, reactions)),
+        text: '\n---\n' + messageHeaders(msg, reactions),
       }],
     })
 
@@ -1293,12 +1293,13 @@ export async function messagesToModelInput(
 
     let text = ''
     if(msg.reply_to_message) {
-      text += '> ' + JSON.stringify(messageHeaders(msg.reply_to_message, undefined)) + '\n'
-      const replyText = messageText(msg.reply_to_message)
+      const replyText = messageHeaders(msg.reply_to_message, undefined)
+        + messageText(msg.reply_to_message)
+
       text += replyText.split('\n').map(it => '> ' + it).join('\n')
       text += '\n'
     }
-    text += messageText(msg) + '\n\n'
+    text += messageText(msg).trim()
 
     const content: Extract<LlmMessage, { role: 'user' }>['content'] = []
     content.push({ type: 'text', text })
@@ -1518,20 +1519,24 @@ export function messageHeaders(
   msg: Types.Message,
   reactions: Reaction[] | undefined
 ) {
-  const headers: Record<string, unknown> = {}
-  headers.messageId = msg.message_id
+  let headers = ''
   if(msg.from) {
-    headers.sender = userToString(msg.from, true)
+    headers += '# ' + userToString(msg.from, true) + '\n'
   }
   else {
     // Never seen this field missing.
-    headers.sender = userToString(undefined, true)
+    headers += '# ' + userToString(undefined, true) + '\n'
   }
-
-  headers.at = dateToString(fromMessageDate(msg.date))
+  headers += '- messageId: ' + msg.message_id + '\n'
+  headers += '- At: ' + dateToString(fromMessageDate(msg.date)) + '\n'
+  /*
+  if(msg.edit_date !== undefined) {
+    headers += '- Edited At: ' + dateToString(fromMessageDate(msg.edit_date))
+  }
+  */
 
   if(reactions) {
-    const reactionsObj: Record<string, unknown> = {}
+    const reactionsObj: string[] = []
 
     for(const reaction of reactions) {
       const emojis: string[] = []
@@ -1551,17 +1556,16 @@ export function messageHeaders(
 
       let result = emojis.join('')
       if(reaction.reason) result += ' - ' + reaction.reason
-      reactionsObj[name] = result
+      reactionsObj.push('    - ' + name + ': ' + result)
     }
 
     if(Object.keys(reactionsObj).length > 0) {
-      headers.reactions = reactionsObj
+      headers += '- Reactions:\n'
+      headers += reactionsObj.join('\n') + '\n'
     }
   }
 
-  if(msg.edit_date !== undefined) {
-    headers.editedAt = dateToString(fromMessageDate(msg.edit_date))
-  }
+  headers += '- Text:\n'
 
   return headers
 }
