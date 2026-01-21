@@ -1792,7 +1792,9 @@ async function doBackup(pool: Db.DbConnOrPool, data: unknown) {
     pool,
     Db.t.backup,
     Db.omit(Db.d.backup, ['sequenceNumber', 'date']),
-    [{ raw: JSON.stringify(data) }],
+    [{
+      raw: JSON.stringify(data, (_, v) => typeof v === 'bigint' ? v.toString() : v),
+    }],
     {}
   )
 }
