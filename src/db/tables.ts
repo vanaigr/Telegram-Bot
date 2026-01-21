@@ -133,4 +133,16 @@ export const tables = {
         "body": t_byteaNullable,
         "createdAt": t_timestamp,
     },
+    "chatSummary": {
+        "chatId": t_bigint,
+        "firstMessageId": t_bigint,
+        "lastMessageId": t_bigint,
+        "numMessages": t_integer,
+        "raw": t_json,
+    },
+    "backup": {
+        "sequenceNumber": t_integer,
+        "date": t_timestamp,
+        "raw": t_json,
+    },
 } as const

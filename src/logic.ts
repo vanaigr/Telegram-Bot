@@ -1,4 +1,5 @@
-import streamConsumers from 'stream/consumers'
+import streamConsumers from 'node:stream/consumers'
+import util from 'node:util'
 
 import { waitUntil, attachDatabasePool } from '@vercel/functions'
 import { OpenRouter } from '@openrouter/sdk'
@@ -329,6 +330,8 @@ export async function reply(
 
   const cancelTypingStatus = startTypingTask(chatId, log)
 
+  const openRouter = new OpenRouter({ apiKey: process.env.OPENROUTER_KEY! });
+
   // Postpone responding for 10 seconds if some attachments are loading.
   // If newer messages arrive, we may not send their images, but we don't
   // want the bot to get stuck forever if there's an active discussion.
@@ -367,25 +370,172 @@ export async function reply(
     await U.delay(until)
   }
 
-  const messages = await(async() => {
-    const messages = await fetchMessages(pool, log, chatId)
-    return messages.slice(messages.length - 30)
-  })()
+  const allMessages = await fetchMessages(pool, log, chatId)
 
+  const summaries = await Db.query(pool,
+    'select', [
+      Db.t.chatSummary.firstMessageId,
+      Db.t.chatSummary.lastMessageId,
+      Db.t.chatSummary.numMessages,
+      Db.t.chatSummary.raw,
+    ],
+    'from', Db.t.chatSummary,
+    'where', Db.eq(Db.t.chatSummary.chatId, Db.param(BigInt(chatId))),
+    'order by', Db.t.chatSummary.firstMessageId,
+  )
+  for(let i = 0; i < 10; i++) {
+    log.I('Checking summary')
+    const toSummarize = (() => {
+      const last = summaries.at(-1)
+      if(last !== undefined && last.numMessages < 50) {
+        log.I('Trying to redo last one')
+
+        const firstIndex = allMessages.findIndex(it => {
+          return it.msg.message_id >= last.firstMessageId
+        })
+
+        if(firstIndex === -1) {
+          log.W('Message not found')
+          return
+        }
+        // if summarizing up to 20 messages ago is not 10 more than the current summary.
+        if((allMessages.length - 20) - firstIndex < last.numMessages + 10) {
+          log.I('Not enough new messages')
+          return
+        }
+
+        return {
+          backup: last,
+          firstIndex,
+          endIndex: Math.min(firstIndex + 50, allMessages.length - 20),
+        }
+      }
+      else {
+        log.I('Trying to create new one')
+        const firstIndex = allMessages.findIndex(it => {
+          return !last || it.msg.message_id > last.lastMessageId
+        })
+        if(firstIndex === -1) {
+          log.W('Message not found')
+          return
+        }
+
+        const endIndex = Math.min(firstIndex + 50, allMessages.length - 20)
+        if(endIndex - firstIndex < 10) {
+          log.I('Not enough new messages')
+          return
+        }
+
+        return {
+          firstIndex,
+          endIndex
+        }
+      }
+    })()
+    if(toSummarize === undefined) break
+
+    log.I('Will be generating')
+
+    if(toSummarize.backup !== undefined) {
+      log.I('Backing up previous')
+      await doBackup(pool, {
+        version: 1,
+        type: 'summary',
+        summary: toSummarize.backup,
+      })
+    }
+
+    const subset = allMessages.slice(toSummarize.firstIndex, toSummarize.endIndex)
+
+    log.I(
+      'Started generating between ',
+      [subset[0].msg.message_id],
+      ' to ',
+      [subset[subset.length - 1].msg.message_id],
+    )
+    const response = await openRouter.chat.send({
+      model: 'mistralai/mistral-small-creative',
+      messages: [
+        {
+          role: 'system',
+          content: 'Take the conversation below and produce a terse 10-sentence summary. Output in English.\n',
+        },
+        {
+          role: 'user',
+          content: subset.map(it => {
+            return {
+              type: 'text',
+              text: 'User: ' + userToString(it.msg.from, true) + '\n'
+                + 'Text: ' + (it.msg.text ?? '<attachment>').trim() + '\n',
+            }
+          }),
+        },
+      ],
+    })
+    log.I('Done generating')
+
+    const content = response.choices[0].message.content
+    if(typeof content !== 'string' || content === '') {
+      log.W('Weird content')
+      await doBackup(pool, response)
+      break
+    }
+
+    const row: (typeof summaries)[number] = {
+      firstMessageId: BigInt(subset[0].msg.message_id),
+      lastMessageId: BigInt(subset[subset.length - 1].msg.message_id),
+      numMessages: subset.length,
+      raw: response,
+    }
+    if(toSummarize.backup !== undefined) summaries.pop()
+    summaries.push(row)
+
+    await Db.tran(pool, async(db) => {
+      const t = Db.t.chatSummary
+      if(toSummarize.backup !== undefined) {
+        await Db.queryRaw(db,
+          'delete from', t,
+          'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
+          'and', Db.eq(t.firstMessageId, Db.param(toSummarize.backup.firstMessageId)),
+        )
+      }
+      await Db.insertMany(
+        db,
+        t,
+        Db.d.chatSummary,
+        [{ ...row, raw: JSON.stringify(row.raw) }],
+        { chatId: BigInt(chatId) }
+      )
+    })
+  }
+  log.I('Done summarizing')
+
+  const messages = allMessages.slice(Math.max(
+    (() => {
+      const lastMessageId = summaries.at(-1)?.lastMessageId
+      if(lastMessageId === undefined) return 0
+      return allMessages.findIndex(it => it.msg.message_id > lastMessageId)
+    })(),
+    allMessages.length - 30,
+  ))
   const respondsToMessageId = messages.at(-1)!.msg.message_id
 
   const openrouterMessages: OpenRouterMessage[] = await messagesToModelInput({
+    // 500 messages is enough?
+    summaries: summaries.slice(summaries.length - 10).map(it => {
+      return (it.raw as OpenRouterResponse).choices[0].message.content as string
+    }),
     messages,
     chatInfo: await chatInfoP,
     log,
     caching: true,
   })
+  console.log(util.inspect(openrouterMessages, { depth: Infinity, maxArrayLength: Infinity }))
 
   let forceSend = false
   let reply: string | undefined
   let reasoning: string = ''
   let reactionsToSend: { emoji: string, messageId: number, shortExplanation: string }[] = []
-  const openRouter = new OpenRouter({ apiKey: process.env.OPENROUTER_KEY! });
   for(let iteration = 0;; iteration++) {
     if(iteration > 3) {
       log.W('Too many steps')
@@ -1015,6 +1165,12 @@ Output Structure: {"user":"<identifier of the user the reasoning belongs to>"}
 
 /// ???????????
 export type OpenRouterMessage = OpenRouter['chat']['send'] extends (a: { messages: Array<infer Message> }) => infer U1 ? Message : never
+// 🤡🤡🤡🤡🤡🤡🤡🤡🤡🤡
+export type OpenRouterResponse = OpenRouter['chat']['send'] extends {
+  (a: { messages: any, stream: false }): infer R
+  (a: { messages: any, stream: true }): infer U1
+  (a: { messages: any, stream: boolean }): infer U2
+} ? Awaited<R> : never
 
 type Photo = {
   file_unique_id: string
@@ -1215,8 +1371,9 @@ type LlmMessage = {
 
 export async function messagesToModelInput(
   {
-    messages, log, chatInfo, caching,
+    summaries, messages, log, chatInfo, caching,
   }: {
+    summaries: string[],
     messages: MessageWithAttachments[],
     chatInfo: Types.ChatFullInfo | undefined,
     log: L.Log
@@ -1236,6 +1393,13 @@ export async function messagesToModelInput(
           users: chatInfo.active_usernames?.map(it => '@' + it),
         }),
       }],
+    })
+  }
+
+  for(const summary of summaries) {
+    openrouterMessages.push({
+      role: 'system',
+      content: [{type: 'text', text: summary.trim() + '\n'}],
     })
   }
 
@@ -1621,6 +1785,16 @@ function startTypingTask(chatId: number, log: L.Log) {
   return () => {
     clearTimeout(timeoutId)
   }
+}
+
+async function doBackup(pool: Db.DbConnOrPool, data: unknown) {
+  await Db.insertMany(
+    pool,
+    Db.t.backup,
+    Db.omit(Db.d.backup, ['sequenceNumber', 'date']),
+    [{ raw: JSON.stringify(data) }],
+    {}
+  )
 }
 
 const validEmojis = ["❤", "👍", "👎", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱", "🤬", "😢", "🎉", "🤩", "🤮", "💩", "🙏", "👌", "🕊", "🤡", "🥱", "🥴", "😍", "🐳", "❤‍🔥", "🌚", "🌭", "💯", "🤣", "⚡", "🍌", "🏆", "💔", "🤨", "😐", "🍓", "🍾", "💋", "🖕", "😈", "😴", "😭", "🤓", "👻", "👨‍💻", "👀", "🎃", "🙈", "😇", "😨", "🤝", "✍", "🤗", "🫡", "🎅", "🎄", "☃", "💅", "🤪", "🗿", "🆒", "💘", "🙉", "🦄", "😘", "💊", "🙊", "😎", "👾", "🤷‍♂", "🤷", "🤷‍♀", "😡"]

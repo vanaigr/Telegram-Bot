@@ -102,3 +102,18 @@ model debug {
     body Bytes?
     createdAt DateTime @db.Timestamp(6) @default(now())
 }
+
+model chatSummary {
+    chatId BigInt
+    firstMessageId BigInt
+    lastMessageId BigInt
+    numMessages Int
+    raw Json
+    @@id([chatId, firstMessageId])
+}
+
+model backup {
+    sequenceNumber Int @id
+    date DateTime @db.Timestamp(6) @default(now())
+    raw Json
+}

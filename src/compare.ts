@@ -21,7 +21,7 @@ const lastMessage = 4164 // keep
 //const lastMessage = 209
 
 const chatId = -1002830050312
-const lastMessage = 4359
+const lastMessage = 4191
 
 const log = L.makeLogger(undefined, undefined)
 
@@ -48,59 +48,20 @@ Think in English. Output in English.
 `
 */
 
-/*
 const prompt = `
-Take the conversation below and produce a compressed version of the conversation. Skip unimportant details, focus on chat participant goals and personalities. Output in english.
+Take the conversation below and produce a terse 10-sentence summary. Output in English.
 `.trim() + '\n'
 
 const continuePrompt = `
-Take previous summary and new conversation below and incorporate the conversation into the summary, while keeping it the same length. Focus on chat participant goals and personalities. Output in english.
+Take previous takeaways and new conversation below and incorporate the conversation into the previous takeaways. Keep  10 most important takeaways about chat users, 1 sentence each. Output as paragraph in Enlish.
 `.trim() + '\n'
-*/
 
 try {
   let messages = await Logic.fetchMessages(pool, log, chatId, {
     skipImages: true,
     lastMessage,
   })
-  //fs.writeFileSync('compaction.json', JSON.stringify(messages))
-  //debugPrint(messages)
-
-  const lastMessages = messages.slice(messages.length - 9)
-  const toSend = lastMessages.map(it => {
-    return {
-      name: Logic.userToString(it.msg.from, true),
-      text: it.msg.text ?? it.msg.caption ?? '',
-    }
-  })
-  toSend.push({
-    name: '@' + Logic.botUsername,
-    ///
-  })
-
-  debugPrint(toSend)
-
-  const result = await sendNonsenseCheckPrompt(
-    //openRouter,
-    toSend,
-    ///
-  )
-  debugPrint(result)
-  await debugSave({ chatId, lastMessage, result })
-
-  /*
-  const openrouterMessages = await Logic.messagesToModelInput({
-    messages,
-    chatInfo: (await Logic.getChatDataFromDb(pool, chatId))!.raw,
-    log,
-    caching: false,
-  })
-  debugPrint(openrouterMessages)
-  */
-
-  /*
-  const messages = JSON.parse(fs.readFileSync('compaction.json').toString()) as Awaited<ReturnType<typeof Logic.fetchMessages>>
-  const firstMessages = messages.slice(0, 100)
+  const firstMessages = messages.slice(0, 50)
   const toSend = firstMessages.map(it => {
     const username = Logic.userToString(it.msg.from, true)
     return {
@@ -110,6 +71,22 @@ try {
   })
   const inputMessages: Logic.OpenRouterMessage[] = [
     { role: 'system', content: prompt },
+    //{ role: 'system', content: continuePrompt },
+    /*
+    {
+role: 'user',
+      content: [
+        {
+          type: 'text',
+          text: '**Previous Takeaways**:\n',
+        },
+        {
+          type: 'text',
+          ///
+        },
+      ],
+    },
+    */
     {
       role: 'user',
       content: [
@@ -124,7 +101,13 @@ try {
     }
   ]
   debugPrint(inputMessages)
-  */
+
+  const response = await LlmSend.send(log, pool, {
+    model: 'mistralai/mistral-small-creative',
+    messages: inputMessages
+  })
+  debugPrint(response)
+  await debugSave(response)
 
   /*
   const messages = JSON.parse(fs.readFileSync('compaction.json').toString()) as Awaited<ReturnType<typeof Logic.fetchMessages>>
@@ -334,11 +317,14 @@ Output Structure: {"user":"<identifier of the user the reasoning belongs to>"}
 `.trim() + '\n'
 
   return await LlmSend.send(log, pool!, {
-    model: 'deepcogito/cogito-v2-preview-llama-109b-moe', // mostly good, we'll see
+    //model: 'deepcogito/cogito-v2-preview-llama-109b-moe', // mostly good, we'll see
+    model: 'mistralai/mistral-small-creative',
     max_completion_tokens: 1000,
+    /*
     reasoning: {
       effort: 'medium',
     },
+    */
     messages: [
       { role: 'system', content: prompt },
       { role: 'user', content: '**Messages**:\n"""\n' },
