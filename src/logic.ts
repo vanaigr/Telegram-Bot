@@ -10,8 +10,8 @@ import * as L from './lib/log.ts'
 import * as U from './lib/util.ts'
 import type * as Types from './types.ts'
 
-const botName = 'балбес'
-const botUsername = 'balbes52_bot'
+export const botName = 'балбес'
+export const botUsername = 'balbes52_bot'
 
 export async function getChatDataFromDb(conn: Db.DbConnOrPool, chatId: number) {
   const t = Db.t.chatFullInfo
@@ -978,9 +978,9 @@ export async function sendNonsenseCheckPrompt(
   const prompt = `
 Below is an excerpt from a conversation between a group of users, along with a sample of reasoning provided by one of them. Identify which user the reasoning belongs to.
 
-Output Instructions:
-Return your answer strictly in valid JSON with the following structure:
-{"user":"<identifier of the user the reasoning belongs to>"}
+**Important**: If reasoning includes user name, it cannot belong to that user.
+
+Output Structure: {"user":"<identifier of the user the reasoning belongs to>"}
 
 `.trim() + '\n'
 
@@ -1014,7 +1014,7 @@ Return your answer strictly in valid JSON with the following structure:
 }
 
 /// ???????????
-type OpenRouterMessage = OpenRouter['chat']['send'] extends (a: { messages: Array<infer Message> }) => infer U1 ? Message : never
+export type OpenRouterMessage = OpenRouter['chat']['send'] extends (a: { messages: Array<infer Message> }) => infer U1 ? Message : never
 
 type Photo = {
   file_unique_id: string

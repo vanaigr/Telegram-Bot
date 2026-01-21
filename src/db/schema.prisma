@@ -99,5 +99,6 @@ model chatWhitelist {
 model debug {
     sequenceNumber Int @id @default(autoincrement())
     raw Json
+    body Bytes?
     createdAt DateTime @db.Timestamp(6) @default(now())
 }

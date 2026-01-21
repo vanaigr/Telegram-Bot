@@ -130,6 +130,7 @@ export const tables = {
     "debug": {
         "sequenceNumber": t_integer,
         "raw": t_json,
+        "body": t_byteaNullable,
         "createdAt": t_timestamp,
     },
 } as const
