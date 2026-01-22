@@ -2,6 +2,10 @@ A Telegram bot that spices up group chats with fun, witty replies. It can read c
 
 The bot uses OpenRouter to generate responses and is deployed on Vercel (serverless functions) + Prisma (postgres).
 
+<p align="center">
+<img height="600" alt="&quot;AI making a fun joke&quot;, artist's impression" src="https://github.com/user-attachments/assets/2de18b21-a32e-41ad-9a61-d05adb489d58" />
+</p>
+
 > [!NOTE]
 > The bot is private (I’m not a millionaire paying for everyone’s usage),
 > but setting up your own version should be pretty straightforward.
