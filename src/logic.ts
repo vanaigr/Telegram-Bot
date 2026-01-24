@@ -724,13 +724,21 @@ export async function reply(
       // It is also more strict this way, since the bot is clearly writing
       // something, but outside observer still decides that his thoughts
       // are not his.
-      const isAware = await evaluateIfAware(
-        messages.slice(messages.length - 9).map(it => it.msg),
-        reasoning,
-        reply,
-        { pool, openRouter, log, chatId, messageId: respondsToMessageId },
-      )
-      if(!isAware) return
+      const [isAware, isUseful] = await Promise.all([
+        evaluateIfAware(
+          messages.slice(messages.length - 9).map(it => it.msg),
+          reasoning,
+          reply,
+          { pool, openRouter, log, chatId, messageId: respondsToMessageId },
+        ),
+        true,
+        /*evaluateIsUseful(
+          messages.slice(messages.length - 9).map(it => it.msg),
+          reply,
+          { openRouter, pool, log, messageId: respondsToMessageId, chatId },
+        )*/
+      ])
+      if(!isAware || !isUseful) return
 
       /*
       const isUseful = await evaluateIsUseful(
@@ -889,7 +897,6 @@ export async function sendPrompt(
 }
 
 
-/*
 async function evaluateIsUseful(
   lastMessages: Types.Message[],
   modelReply: string,
@@ -1037,7 +1044,6 @@ export async function sendControlPrompt(
     ],
   })
 }
-*/
 
 // Sometimes the model thinks it is one of the users.
 // This detects that and returns `false`.
