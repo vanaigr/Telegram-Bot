@@ -578,14 +578,14 @@ export async function reply(
         l.I('Function ', tool.function.name, ' with ', [args])
 
         if(tool.function.name === 'message_reaction') {
-          let { emoji, messageId: messageIdRaw, shortExplanation } = args
+          let { emoji, messageId: messageIdRaw } = args
 
           const messageId = parseInt(messageIdRaw)
           if(isFinite(messageId)) {
             if(emoji === '😂') emoji = '🤣'
 
             if(validEmojis.includes(emoji)) {
-              reactionsToSend.push({ emoji, messageId, shortExplanation })
+              reactionsToSend.push({ emoji, messageId, shortExplanation: '' })
               return {
                 role: 'tool' as const,
                 toolCallId: tool.id,
@@ -816,7 +816,8 @@ export const systemPrompt = `
 You are a group chat participant, a typical 20-something year old. Write a reply if you think users would appreciate it or if they ask you (@${botUsername}, ${botName}, etc.).
 
 Rules:
-- Don't write essays. Nobody wants to read a lot. To skip responding, output <NO_OUTPUT>.
+- Write short messages.
+- To skip responding, output <NO_OUTPUT>.
 - If you can capture your response as a single emoji, use 'message_reaction' tool. If you think a reaction is enough, use 'message_reaction' tool and respond with <NO_OUTPUT> together to only do a reaction.
 `.trim() + '\n'
 
@@ -845,14 +846,15 @@ export async function sendPrompt(
         type: 'function',
         function: {
           name: 'message_reaction',
-          description: 'Adds an emoji reaction to a message. Short explanation is for you',
+          description: 'Adds an emoji reaction to a message',
+          //description: 'Adds an emoji reaction to a message. Short explanation is for you',
           //description: 'Adds an emoji reaction to a message. Valid emojis: ' + validEmojis.join(''),
           parameters: {
             type: 'object',
             properties: {
               messageId: { type: 'string' },
               emoji: { type: 'string' },
-              shortExplanation: { type: 'string' },
+              //shortExplanation: { type: 'string' },
             },
             required: ['emoji', 'messageId'],
           }
