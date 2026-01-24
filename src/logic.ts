@@ -1381,6 +1381,7 @@ export async function messagesToModelInput(
   }
 ): Promise<LlmMessage[]> {
   const openrouterMessages: LlmMessage[] = []
+  const photoQuota = { remainingCount: 5, remainingSize: 5_000_000 }
 
   if(chatInfo) {
     openrouterMessages.push({
@@ -1469,7 +1470,7 @@ export async function messagesToModelInput(
     content.push({ type: 'text', text })
 
     for(const photo of photos) {
-      content.push(await photoToMessagePart(log, photo, '<image not available>'))
+      content.push(await photoToMessagePart(log, photo, '<image not available>', photoQuota))
     }
     if(video) {
       content.push({
@@ -1484,7 +1485,8 @@ export async function messagesToModelInput(
         content.push(await photoToMessagePart(
           log,
           video.thumbnail,
-          '<thumbnail not available>'
+          '<thumbnail not available>',
+          photoQuota
         ))
       }
     }
@@ -1497,7 +1499,8 @@ export async function messagesToModelInput(
         content.push(await photoToMessagePart(
           log,
           videoNote.thumbnail,
-          '<thumbnail not available>'
+          '<thumbnail not available>',
+          photoQuota
         ))
       }
     }
@@ -1578,10 +1581,17 @@ export async function messagesToModelInput(
   return openrouterMessages
 }
 
-async function photoToMessagePart(log: L.Log, photo: Photo, fallback: string) {
-  if(photo.status === 'done') {
+async function photoToMessagePart(
+  log: L.Log,
+  photo: Photo,
+  fallback: string,
+  quota: { remainingCount: number, remainingSize: number }
+) {
+  if(photo.status === 'done' && quota.remainingCount > 0 && quota.remainingSize >= photo.data.length) {
     const type = await new FileTypeParser().fromBuffer(photo.data)
     if(type !== undefined) {
+      quota.remainingCount--
+      quota.remainingSize -= photo.data.length
       const dataUrl = `data:${type.mime};base64,${photo.data.toString("base64")}`;
       return {
         type: 'image_url' as const,
