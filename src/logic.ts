@@ -372,6 +372,7 @@ export async function reply(
 
   const allMessages = await fetchMessages(pool, log, chatId)
 
+  /*
   const summaries = await Db.query(pool,
     'select', [
       Db.t.chatSummary.firstMessageId,
@@ -509,22 +510,27 @@ export async function reply(
     })
   }
   log.I('Done summarizing')
+  */
 
   const messages = allMessages.slice(Math.max(
+    /*
     (() => {
       const lastMessageId = summaries.at(-1)?.lastMessageId
       if(lastMessageId === undefined) return 0
       return allMessages.findIndex(it => it.msg.message_id > lastMessageId)
     })(),
+    */
     allMessages.length - 30,
   ))
   const respondsToMessageId = messages.at(-1)!.msg.message_id
 
   const openrouterMessages: OpenRouterMessage[] = await messagesToModelInput({
+    /*
     // 500 messages is enough?
     summaries: summaries.slice(summaries.length - 10).map(it => {
       return (it.raw as OpenRouterResponse).choices[0].message.content as string
     }),
+    */
     messages,
     chatInfo: await chatInfoP,
     log,
@@ -1371,9 +1377,10 @@ type LlmMessage = {
 
 export async function messagesToModelInput(
   {
-    summaries, messages, log, chatInfo, caching,
+    //summaries,
+    messages, log, chatInfo, caching,
   }: {
-    summaries: string[],
+    //summaries: string[],
     messages: MessageWithAttachments[],
     chatInfo: Types.ChatFullInfo | undefined,
     log: L.Log
@@ -1397,12 +1404,14 @@ export async function messagesToModelInput(
     })
   }
 
+  /*
   for(const summary of summaries) {
     openrouterMessages.push({
       role: 'system',
       content: [{type: 'text', text: summary.trim() + '\n'}],
     })
   }
+*/
 
   for(const { msg, photos, video, videoNote, reactions } of messages) {
     if(msg.new_chat_title !== undefined) {
