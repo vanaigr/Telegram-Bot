@@ -846,6 +846,7 @@ export async function sendPrompt(
     //model: 'moonshotai/kimi-k2-0905',
     //model: 'moonshotai/kimi-k2-thinking',
     //model: 'openai/gpt-oss-120b', // explodes
+    maxCompletionTokens: 3000, // Explodes sometimes
     provider: {
       dataCollection: 'deny',
     },
