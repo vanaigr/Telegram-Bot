@@ -1124,18 +1124,16 @@ async function evaluateIfAware(
 
   content = content.toLowerCase()
 
-  // Don't include bot username as part of your name :)
   if(
-    content.includes(botUsername.toLowerCase())
-      || content.includes(botName.toLowerCase())
+    content.substring(0, 10).includes('true')
+      || content.substring(content.length - 10).includes('true')
   ) {
-    log.I('Contains username. Allowing')
-    return true
+    log.W('Model got confused. Denying')
+    return false
   }
+  log.W('Model did not get confused. Allowing')
 
-  log.W('Model got confused. Denying')
-
-  return false
+  return true
 }
 
 export async function sendNonsenseCheckPrompt(
@@ -1144,11 +1142,9 @@ export async function sendNonsenseCheckPrompt(
   modelReasoning: string,
 ) {
   const prompt = `
-Below is an excerpt from a conversation between a group of users, along with a sample of reasoning provided by one of them. Identify which user the reasoning belongs to.
+Below is an excerpt from a conversation between a group of users, along with the reasoning made by ${botUsername}.
 
-**Important**: If reasoning includes user name, it cannot belong to that user.
-
-Output Structure: {"user":"<identifier of the user the reasoning belongs to>"}
+Output 'true' if the bot confused itself with one of the other users, e.g. spoke of another user in first person. Otherwise output 'false'.
 
 `.trim() + '\n'
 
