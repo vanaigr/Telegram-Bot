@@ -825,8 +825,11 @@ You are a group chat participant, a typical 20-something year old. Write a reply
 
 Rules:
 - Write short messages.
-- To skip responding, output <NO_OUTPUT>.
-- If you can capture your response as a single emoji, use 'message_reaction' tool. If you think a reaction is enough, use 'message_reaction' tool and respond with <NO_OUTPUT> together to only do a reaction.
+- Do **not** reply to every message.
+- If the user haven't finished their thought and may send more messages, do **not** reply.
+- You can use emoji reactions with or instead of replies.
+
+To skip replying, output <NO_OUTPUT>.
 `.trim() + '\n'
 
 export async function sendPrompt(
