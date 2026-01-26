@@ -1153,8 +1153,8 @@ Output Structure: {"user":"<identifier of the user the reasoning belongs to>"}
 `.trim() + '\n'
 
   return await openRouter.chat.send({
-    model: 'deepcogito/cogito-v2-preview-llama-109b-moe', // mostly good, we'll see
-    maxCompletionTokens: 1000,
+    model: 'openai/gpt-5-nano',
+    maxCompletionTokens: 2000,
     reasoning: {
       effort: 'medium',
     },
