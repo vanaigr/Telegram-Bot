@@ -551,7 +551,17 @@ export async function reply(
 
     log.I('Sending conversation')
 
-    const response = await sendPrompt(openRouter, openrouterMessages, systemPrompt)
+    let response: OpenRouterResponse
+    try {
+      response = await sendPrompt(openRouter, openrouterMessages, systemPrompt)
+    }
+    catch(error) {
+      log.E('During response generation: ', [error])
+      cancelTypingStatus()
+      // It randomly crases, I don't know why.
+      completion.sent = true
+      return
+    }
     log.I('Responded')
 
     if(!reasoning) reasoning = response.choices[0].message.reasoning ?? ''
