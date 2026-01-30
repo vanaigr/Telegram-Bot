@@ -536,7 +536,6 @@ export async function reply(
     log,
     caching: true,
   })
-  console.log(util.inspect(openrouterMessages, { depth: Infinity, maxArrayLength: Infinity }))
 
   let forceSend = false
   let reply: string | undefined
@@ -560,7 +559,8 @@ export async function reply(
       cancelTypingStatus()
       // It randomly crases, I don't know why.
       completion.sent = true
-      return
+      reply = ''
+      break
     }
     log.I('Responded')
 
@@ -593,6 +593,7 @@ export async function reply(
           const messageId = parseInt(messageIdRaw)
           if(isFinite(messageId)) {
             if(emoji === '😂') emoji = '🤣'
+          if(emoji === '❤️') emoji = '❤'
 
             if(validEmojis.includes(emoji)) {
               reactionsToSend.push({ emoji, messageId, shortExplanation: '' })
@@ -698,20 +699,23 @@ export async function reply(
 
       for(const result of results) openrouterMessages.push(result)
     }
-    else if(finishReason === 'stop' || finishReason === 'length') {
-      const content = response.choices[0].message.content
-      if(typeof content === 'string') {
-        reply = content
-      }
-      else {
-        log.W('Weird content ', [content])
-        reply = ''
-      }
+
+    if(finishReason === 'length') {
+      log.W('Ran out of tokens')
+      reply = ''
       break
     }
+
+    const content = response.choices[0].message.content
+    if(typeof content === 'string') {
+      reply = content
+    }
     else {
-      log.W('Unknown finishReason: ', [finishReason])
+      log.W('Weird content ', [content])
       reply = ''
+    }
+
+    if(finishReason === 'stop' || !isEmptyReply(reply)) {
       break
     }
   }
@@ -719,48 +723,10 @@ export async function reply(
   cancelTypingStatus()
 
   const sendingP = (async() => {
-    // Sometimes it gets confused and outputs both a message and this.
-    reply = reply.replaceAll('<NO_OUTPUT>', '').trim()
-
-    if(reply === '' || reply === '<>' || reply.length > 4000) {
+    if(isEmptyReply(reply)) {
       log.I('Skipping response')
       completion.sent = true
       return
-    }
-
-    if(!forceSend) {
-      // NOTE: we need at least 1 message from the bot,
-      // and it's easier to wait until we have one for sure.
-      // It is also more strict this way, since the bot is clearly writing
-      // something, but outside observer still decides that his thoughts
-      // are not his.
-      const [isAware, isUseful] = await Promise.all([
-        evaluateIfAware(
-          messages.slice(messages.length - 9).map(it => it.msg),
-          reasoning,
-          reply,
-          { pool, openRouter, log, chatId, messageId: respondsToMessageId },
-        ),
-        true,
-        /*evaluateIsUseful(
-          messages.slice(messages.length - 9).map(it => it.msg),
-          reply,
-          { openRouter, pool, log, messageId: respondsToMessageId, chatId },
-        )*/
-      ])
-      if(!isAware || !isUseful) return
-
-      /*
-      const isUseful = await evaluateIsUseful(
-        messages.slice(messages.length - 9).map(it => it.msg),
-        reply,
-        { pool, openRouter, log, chatId, messageId: respondsToMessageId },
-      )
-      if(!isUseful) return
-      */
-    }
-    else {
-      log.I('Force sending')
     }
 
     log.I('Sending response')
@@ -828,18 +794,23 @@ export async function reply(
   log.I('Done responding')
 }
 
+function isEmptyReply(reply: string) {
+  return reply === '<NO_OUTPUT>' || reply === '' || reply === '<>' || reply.length > 4000
+}
+
 type TelegramWrapper<T> = { ok: true, result: T } | { ok: false, description: string }
 
 export const systemPrompt = `
 You are a group chat participant, a typical 20-something year old. Write a reply if you think users would appreciate it or if they ask you (@${botUsername}, ${botName}, etc.).
 
 Rules:
-- Write short messages.
-- Do **not** reply to every message.
-- If the user haven't finished their thought and may send more messages, do **not** reply.
+- Write short but interesting messages.
 - You can use emoji reactions with or instead of replies.
+- Do not interrupt users talking between themselves, or when it looks like another participant haven't finished their thought and would type more.
+- If there's not much to say, skip replying. You shouldn't reply to every message.
 
 To skip replying, output <NO_OUTPUT>.
+Think in English.
 `.trim() + '\n'
 
 export async function sendPrompt(
@@ -848,15 +819,9 @@ export async function sendPrompt(
   systemPrompt: string,
 ) {
   return await openRouter.chat.send({
-    //model: 'openai/gpt-5-mini', // слишком стерильный
-    //model: 'openai/chatgpt-4o-latest', // тоже наверно
-    //model: 'x-ai/grok-4.1-fast', // not super coherent
-    //model: 'google/gemini-2.5-flash-lite',
-    model: 'google/gemini-3-flash-preview',
-    //model: 'moonshotai/kimi-k2-0905',
-    //model: 'moonshotai/kimi-k2-thinking',
-    //model: 'openai/gpt-oss-120b', // explodes
-    maxCompletionTokens: 3000, // Explodes sometimes
+    //model: 'google/gemini-3-flash-preview', // good, but we need better. 1. Confuses people a lot. 2. Think's it someone else. 3. Eventually explodes (longer and longer messages)
+    model: 'moonshotai/kimi-k2.5',
+    maxCompletionTokens: 3000,
     provider: {
       dataCollection: 'deny',
     },
@@ -869,14 +834,11 @@ export async function sendPrompt(
         function: {
           name: 'message_reaction',
           description: 'Adds an emoji reaction to a message',
-          //description: 'Adds an emoji reaction to a message. Short explanation is for you',
-          //description: 'Adds an emoji reaction to a message. Valid emojis: ' + validEmojis.join(''),
           parameters: {
             type: 'object',
             properties: {
               messageId: { type: 'string' },
               emoji: { type: 'string' },
-              //shortExplanation: { type: 'string' },
             },
             required: ['emoji', 'messageId'],
           }
@@ -886,7 +848,7 @@ export async function sendPrompt(
         type: 'function',
         function: {
           name: 'search',
-          description: 'Perform Search. **Important**: Will fail without express user consent "yes, search". Request before use, warn that search is expensive',
+          description: 'Perform Search. **Important**: Will fail without express user consent',
           parameters: {
             type: "object",
             properties: {
@@ -906,283 +868,6 @@ export async function sendPrompt(
     messages: [
       { role: 'system', content: systemPrompt },
       ...messages,
-    ],
-  })
-}
-
-
-async function evaluateIsUseful(
-  lastMessages: Types.Message[],
-  modelReply: string,
-  ctx: {
-    openRouter: OpenRouter,
-    pool: Db.DbPool,
-    log: L.Log,
-    chatId: number,
-    messageId: number,
-  }
-): Promise<boolean> {
-  const log = ctx.log.addedCtx('filter')
-
-  log.I('Checking')
-
-  const botMessages = 1 + lastMessages.filter(it => it.from?.username === botUsername).length
-  if(botMessages / (lastMessages.length + 1) <= 0.21) {
-    log.I('First message in a while. Allowing')
-    return true
-  }
-
-  const toSend = lastMessages.map(it => {
-    return {
-      name: userToString(it.from, false),
-      text: it.text ?? it.caption ?? '',
-    }
-  })
-  toSend.push({
-    name: '@' + botUsername,
-    text: modelReply,
-  })
-
-  let controlResponse: Awaited<ReturnType<typeof sendControlPrompt>>
-  try {
-    controlResponse = await sendControlPrompt(ctx.openRouter, toSend)
-  }
-  catch(error) {
-    log.E('During LLM control: ', [error], '. Allowing')
-    return true
-  }
-
-  try {
-    await Db.insertMany(
-      ctx.pool,
-      Db.t.postFilterResponses,
-      Db.omit(Db.d.postFilterResponses, ['sequenceNumber']),
-      [{
-        raw: JSON.stringify(controlResponse),
-        respondsToChatId: ctx.chatId,
-        respondsToMessageId: ctx.messageId,
-      }],
-      {}
-    )
-  }
-  catch(error) {
-    log.E('During db save: ', [error])
-    log.I('Could not save: ', [controlResponse])
-  }
-
-  const content = controlResponse.choices[0].message.content
-  if(typeof content !== 'string') {
-    log.W('Weird content. Allowing')
-    return true
-  }
-
-  if(content === '') {
-    // Probably ran out of tokens or could not decide.
-    // Which probably means the reply is useful.
-    log.I('Content is empty. Allowind')
-    return true
-  }
-
-  const digit = content.match(/\d/)?.[0] || ''
-  if(!digit) {
-    log.W('Could not parse. Allowing')
-    return true
-  }
-
-  const score = parseInt(digit)
-  log.I('Score: ', [score])
-
-  if(score < 5) {
-    log.I('Allowing')
-    return true
-  }
-
-  // maps 5-9 in the 4-10 range so that 0 and 1 probabilities don't happen.
-  const probability = Math.pow((score - 4) / (10 - 4), 0.5)
-  const rand = Math.random()
-  log.I('Random chance: ', [rand], ', threshold: ', [probability])
-  if(rand < probability) {
-    log.I('Randomly denying')
-    return false
-  }
-  else {
-    log.I('Randomly allowing')
-    return true
-  }
-}
-
-export const controlPrompt = `
-Determinte the score for messages from ${'`'}@${botUsername}${'`'} based on whether it responds too often or parrots previous messages.
-
-Respond with a number from 1 to 9, where 1 indicates the frequency is good and no parroting, and 9 indicates too frequent and a lot of parroting.
-
-**Important Rule**: If other users asked ${'`'}@${botUsername}${'`'}/${'`'}${botName}${'`'} to respond in a recent message, output a score of 1 immediately. No exceptions.
-
-Think in english.
-
-`.trim() + '\n'
-
-export async function sendControlPrompt(
-  openRouter: OpenRouter,
-  messages: { name: string, text: string }[],
-) {
-  return await openRouter.chat.send({
-    //model: 'allenai/olmo-3-7b-think', // did not work at all
-    // model: 'nvidia/llama-3.3-nemotron-super-49b-v1.5', // token hungry
-    //model: 'google/gemini-2.5-flash-lite-preview-09-2025', // wrong, latency
-    //model: 'google/gemini-2.5-flash-lite', // wrong, latency
-    //model: 'nousresearch/hermes-4-70b', // wrong
-    //model: 'qwen/qwen3-235b-a22b-thinking-2507', // did not work at all
-    //model: 'deepseek/deepseek-chat-v3.1', // did not work at all
-    model: 'deepcogito/cogito-v2-preview-llama-109b-moe', // mostly good, we'll see
-    //model: 'minimax/minimax-m2.1', // good
-    maxCompletionTokens: 1000,
-    reasoning: {
-      effort: 'medium',
-    },
-    provider: {
-      dataCollection: 'deny',
-    },
-    stream: false,
-    messages: [
-      { role: 'system', content: controlPrompt },
-      ...messages.map(message => {
-        return {
-          role: 'user' as const,
-          content: [{
-            type: 'text' as const,
-            text: 'User: ' + message.name + '\nText: ' + message.text.trim() + '\n\n',
-          }],
-        }
-      }),
-    ],
-  })
-}
-
-// Sometimes the model thinks it is one of the users.
-// This detects that and returns `false`.
-async function evaluateIfAware(
-  lastMessages: Types.Message[],
-  modelReasoning: string,
-  modelOutput: string,
-  ctx: {
-    openRouter: OpenRouter,
-    pool: Db.DbPool,
-    log: L.Log,
-    chatId: number,
-    messageId: number,
-  }
-) {
-  const log = ctx.log.addedCtx('nonsense filter')
-  log.I('Checking')
-
-  if(!modelReasoning) {
-    log.I('No reasoning. Allowing')
-    return true
-  }
-
-  const toSend = lastMessages.map(it => {
-    return {
-      name: userToString(it.from, false),
-      text: it.text ?? it.caption ?? '',
-    }
-  })
-  toSend.push({
-    name: '@' + botUsername,
-    text: modelOutput,
-  })
-
-  let controlResponse: Awaited<ReturnType<typeof sendNonsenseCheckPrompt>>
-  try {
-    controlResponse = await sendNonsenseCheckPrompt(ctx.openRouter, toSend, modelReasoning)
-  }
-  catch(error) {
-    log.E('During LLM control: ', [error], '. Allowing')
-    return true
-  }
-
-  try {
-    await Db.insertMany(
-      ctx.pool,
-      Db.t.responses,
-      Db.omit(Db.d.responses, ['sequenceNumber']),
-      [{
-        raw: JSON.stringify(controlResponse),
-        respondsToChatId: ctx.chatId,
-        respondsToMessageId: ctx.messageId,
-      }],
-      {}
-    )
-  }
-  catch(error) {
-    log.E('During db save: ', [error])
-    log.I('Could not save: ', [controlResponse])
-  }
-
-  let content = controlResponse.choices[0].message.content
-  if(typeof content !== 'string') {
-    log.W('Weird content. Allowing')
-    return true
-  }
-
-  if(content === '') {
-    // Probably ran out of tokens or could not decide.
-    // Which probably means the reply is useful.
-    log.I('Content is empty. Allowind')
-    return true
-  }
-
-  content = content.toLowerCase()
-
-  if(
-    content.substring(0, 10).includes('true')
-      || content.substring(content.length - 10).includes('true')
-  ) {
-    log.W('Model got confused. Denying')
-    return false
-  }
-  log.W('Model did not get confused. Allowing')
-
-  return true
-}
-
-export async function sendNonsenseCheckPrompt(
-  openRouter: OpenRouter,
-  messages: { name: string, text: string }[], // includes model output
-  modelReasoning: string,
-) {
-  const prompt = `
-Below is an excerpt from a conversation between a group of users, along with the reasoning made by ${botUsername}.
-
-Output 'true' if the bot confused itself with one of the other users, e.g. spoke of another user in first person. Otherwise output 'false'.
-
-`.trim() + '\n'
-
-  return await openRouter.chat.send({
-    model: 'openai/gpt-5-nano',
-    maxCompletionTokens: 2000,
-    reasoning: {
-      effort: 'medium',
-    },
-    provider: {
-      dataCollection: 'deny',
-    },
-    stream: false,
-    messages: [
-      { role: 'system', content: prompt },
-      { role: 'user', content: '**Messages**:\n"""\n' },
-      ...messages.map(message => {
-        return {
-          role: 'user' as const,
-          content: [{
-            type: 'text' as const,
-            text: 'User: ' + message.name + '\nText: ' + message.text.trim() + '\n\n',
-          }],
-        }
-      }),
-      { role: 'user', content: '"""\n**Reasoning**:\n"""\n' },
-      { role: 'user', content: modelReasoning },
-      { role: 'user', content: '\n"""' },
     ],
   })
 }
