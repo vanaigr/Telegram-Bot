@@ -372,179 +372,24 @@ export async function reply(
 
   const allMessages = await fetchMessages(pool, log, chatId)
 
-  /*
-  const summaries = await Db.query(pool,
-    'select', [
-      Db.t.chatSummary.firstMessageId,
-      Db.t.chatSummary.lastMessageId,
-      Db.t.chatSummary.numMessages,
-      Db.t.chatSummary.raw,
-    ],
-    'from', Db.t.chatSummary,
-    'where', Db.eq(Db.t.chatSummary.chatId, Db.param(BigInt(chatId))),
-    'order by', Db.t.chatSummary.firstMessageId,
-  )
-  for(let i = 0; i < 10; i++) {
-    log.I('Checking summary')
-    const toSummarize = (() => {
-      const last = summaries.at(-1)
-      if(last !== undefined && last.numMessages < 50) {
-        log.I('Trying to redo last one')
-
-        const firstIndex = allMessages.findIndex(it => {
-          return it.msg.message_id >= last.firstMessageId
-        })
-
-        if(firstIndex === -1) {
-          log.W('Message not found')
-          return
-        }
-        // if summarizing up to 20 messages ago is not 10 more than the current summary.
-        if((allMessages.length - 20) - firstIndex < last.numMessages + 10) {
-          log.I('Not enough new messages')
-          return
-        }
-
-        return {
-          backup: last,
-          firstIndex,
-          endIndex: Math.min(firstIndex + 50, allMessages.length - 20),
-        }
-      }
-      else {
-        log.I('Trying to create new one')
-        const firstIndex = allMessages.findIndex(it => {
-          return !last || it.msg.message_id > last.lastMessageId
-        })
-        if(firstIndex === -1) {
-          log.W('Message not found')
-          return
-        }
-
-        const endIndex = Math.min(firstIndex + 50, allMessages.length - 20)
-        if(endIndex - firstIndex < 10) {
-          log.I('Not enough new messages')
-          return
-        }
-
-        return {
-          firstIndex,
-          endIndex
-        }
-      }
-    })()
-    if(toSummarize === undefined) break
-
-    log.I('Will be generating')
-
-    if(toSummarize.backup !== undefined) {
-      log.I('Backing up previous')
-      await doBackup(pool, {
-        version: 1,
-        type: 'summary',
-        summary: toSummarize.backup,
-      })
-    }
-
-    const subset = allMessages.slice(toSummarize.firstIndex, toSummarize.endIndex)
-
-    log.I(
-      'Started generating between ',
-      [subset[0].msg.message_id],
-      ' to ',
-      [subset[subset.length - 1].msg.message_id],
-    )
-    const response = await openRouter.chat.send({
-      model: 'mistralai/mistral-small-creative',
-      messages: [
-        {
-          role: 'system',
-          content: 'Take the conversation below and produce a terse 10-sentence summary. Output in English.\n',
-        },
-        {
-          role: 'user',
-          content: subset.map(it => {
-            return {
-              type: 'text',
-              text: 'User: ' + userToString(it.msg.from, true) + '\n'
-                + 'Text: ' + (it.msg.text ?? '<attachment>').trim() + '\n',
-            }
-          }),
-        },
-      ],
-    })
-    log.I('Done generating')
-
-    const content = response.choices[0].message.content
-    if(typeof content !== 'string' || content === '') {
-      log.W('Weird content')
-      await doBackup(pool, response)
-      break
-    }
-
-    const row: (typeof summaries)[number] = {
-      firstMessageId: BigInt(subset[0].msg.message_id),
-      lastMessageId: BigInt(subset[subset.length - 1].msg.message_id),
-      numMessages: subset.length,
-      raw: response,
-    }
-    if(toSummarize.backup !== undefined) summaries.pop()
-    summaries.push(row)
-
-    await Db.tran(pool, async(db) => {
-      const t = Db.t.chatSummary
-      if(toSummarize.backup !== undefined) {
-        await Db.queryRaw(db,
-          'delete from', t,
-          'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
-          'and', Db.eq(t.firstMessageId, Db.param(toSummarize.backup.firstMessageId)),
-        )
-      }
-      await Db.insertMany(
-        db,
-        t,
-        Db.d.chatSummary,
-        [{ ...row, raw: JSON.stringify(row.raw) }],
-        { chatId: BigInt(chatId) }
-      )
-    })
-  }
-  log.I('Done summarizing')
-  */
-
   const messages = allMessages.slice(Math.max(
-    /*
-    (() => {
-      const lastMessageId = summaries.at(-1)?.lastMessageId
-      if(lastMessageId === undefined) return 0
-      return allMessages.findIndex(it => it.msg.message_id > lastMessageId)
-    })(),
-    */
     allMessages.length - 30,
   ))
   const respondsToMessageId = messages.at(-1)!.msg.message_id
 
   const openrouterMessages: OpenRouterMessage[] = await messagesToModelInput({
-    /*
-    // 500 messages is enough?
-    summaries: summaries.slice(summaries.length - 10).map(it => {
-      return (it.raw as OpenRouterResponse).choices[0].message.content as string
-    }),
-    */
     messages,
     chatInfo: await chatInfoP,
     log,
     caching: true,
   })
 
-  let forceSend = false
-  let reply: string | undefined
-  let reasoning: string = ''
-  let reactionsToSend: { emoji: string, messageId: number, shortExplanation: string }[] = []
+  const promises: Promise<unknown>[] = []
+
   for(let iteration = 0;; iteration++) {
-    if(iteration > 3) {
+    if(iteration > 10) {
       log.W('Too many steps')
-      reply = ''
+      completion.sent = true
       break
     }
 
@@ -559,12 +404,9 @@ export async function reply(
       cancelTypingStatus()
       // It randomly crases, I don't know why.
       completion.sent = true
-      reply = ''
       break
     }
     log.I('Responded')
-
-    if(!reasoning) reasoning = response.choices[0].message.reasoning ?? ''
 
     await Db.insertMany(
       pool,
@@ -577,11 +419,12 @@ export async function reply(
       }],
       {}
     )
+    openrouterMessages.push(response.choices[0].message)
+
+    const reactionsToSend: { emoji: string, messageId: number, shortExplanation: string }[] = []
 
     const finishReason = response.choices[0].finishReason
     if(finishReason === 'tool_calls') {
-      openrouterMessages.push(response.choices[0].message)
-
       const results = await Promise.all(response.choices[0].message.toolCalls!.map(async(tool, i) => {
         const args = JSON.parse(tool.function.arguments)
         const l = log.addedCtx('tool ', [i])
@@ -593,7 +436,7 @@ export async function reply(
           const messageId = parseInt(messageIdRaw)
           if(isFinite(messageId)) {
             if(emoji === '😂') emoji = '🤣'
-          if(emoji === '❤️') emoji = '❤'
+            if(emoji === '❤️') emoji = '❤'
 
             if(validEmojis.includes(emoji)) {
               reactionsToSend.push({ emoji, messageId, shortExplanation: '' })
@@ -662,7 +505,6 @@ export async function reply(
 
             const content = searchResult.choices[0].message.content
             if(typeof content === 'string') {
-              forceSend = true
               return {
                 role: 'tool' as const,
                 toolCallId: tool.id,
@@ -702,99 +544,111 @@ export async function reply(
 
     if(finishReason === 'length') {
       log.W('Ran out of tokens')
-      reply = ''
+      completion.sent = true
       break
     }
 
-    const content = response.choices[0].message.content
-    if(typeof content === 'string') {
-      reply = content
-    }
-    else {
-      log.W('Weird content ', [content])
-      reply = ''
+    const reply = (() => {
+      const content = response.choices[0].message.content
+      if(typeof content === 'string') {
+        return content
+      }
+      else {
+        log.W('Weird content ', [content])
+        return ''
+      }
+    })()
+
+    if(!isEmptyReply(reply)) {
+      promises.push((async() => {
+        log.I('Sending response')
+        const responseResult = await sendMessage(chatId, reply, log)
+        if(responseResult.status !== 'ok') {
+          return
+        }
+        if(!responseResult.data.ok) {
+          log.E([responseResult.data.description])
+          return
+        }
+        const newMessage = responseResult.data.result
+        completion.sent = true
+
+        log.I('Inserting response')
+        await Db.insertMany(
+          pool,
+          Db.t.messages,
+          Db.d.messages,
+          [{
+            chatId: newMessage.chat.id,
+            messageId: newMessage.message_id,
+            date: fromMessageDate(newMessage.date).toJSON(),
+            type: 'assistant',
+            raw: JSON.stringify(newMessage),
+          }],
+          {}
+        )
+      })())
     }
 
-    if(finishReason === 'stop' || !isEmptyReply(reply)) {
+    if(reactionsToSend.length > 0) {
+        const reactions = [...new Map(reactionsToSend.map(it => [it.messageId, it])).values()]
+
+      promises.push(...reactions.map(async(reaction) => {
+        await setMessageReaction(chatId, reaction.messageId, reaction.emoji, log)
+      }))
+
+      promises.push((async() => {
+
+        const now = Math.floor(T.Now.instant().epochMilliseconds / 1000)
+        await updateReactionRows(pool, reactions.map(it => {
+          return {
+            chatId,
+            messageId: it.messageId,
+            hash: U.getHash('bot'),
+            raw: JSON.stringify({
+              chat: { id: chatId },
+              message_id: it.messageId,
+              date: now,
+              user: {
+                id: -1,
+                first_name: botName,
+                username: botUsername,
+              },
+              new_reaction: [{ type: 'emoji', emoji: it.emoji }],
+            } satisfies Types.MessageReactionUpdated),
+            reason: it.shortExplanation ?? '',
+          }
+        }))
+      })())
+    }
+
+    if(finishReason === 'stop') {
+      if(isEmptyReply(reply)) {
+        log.W('Model stopped with no output. Going to next iteration')
+        openrouterMessages.push({ role: 'system', content: 'Empty Reply. Either reply with text or <NO_OUTPUT>' })
+        continue
+      }
       break
     }
+
+    if(finishReason === 'tool_calls') {
+      log.I('Going to next turn after ', [finishReason])
+      continue
+    }
+
+    log.E('Non-continue finishReason: ', [finishReason], '. Stopping')
+    break
   }
 
   cancelTypingStatus()
 
-  const sendingP = (async() => {
-    if(isEmptyReply(reply)) {
-      log.I('Skipping response')
-      completion.sent = true
-      return
-    }
-
-    log.I('Sending response')
-    const responseResult = await sendMessage(chatId, reply, log)
-    if(responseResult.status !== 'ok') {
-      return
-    }
-    if(!responseResult.data.ok) {
-      log.E([responseResult.data.description])
-      return
-    }
-    const newMessage = responseResult.data.result
-    completion.sent = true
-
-    log.I('Inserting response')
-    await Db.insertMany(
-      pool,
-      Db.t.messages,
-      Db.d.messages,
-      [{
-        chatId: newMessage.chat.id,
-        messageId: newMessage.message_id,
-        date: fromMessageDate(newMessage.date).toJSON(),
-        type: 'assistant',
-        raw: JSON.stringify(newMessage),
-      }],
-      {}
-    )
-  })()
-
-  const reactions = [...new Map(reactionsToSend.map(it => [it.messageId, it])).values()]
-
-  const dbReactionsP = (async() => {
-    const now = Math.floor(T.Now.instant().epochMilliseconds / 1000)
-    await updateReactionRows(pool, reactions.map(it => {
-      return {
-        chatId,
-        messageId: it.messageId,
-        hash: U.getHash('bot'),
-        raw: JSON.stringify({
-          chat: { id: chatId },
-          message_id: it.messageId,
-          date: now,
-          user: {
-            id: -1,
-            first_name: botName,
-            username: botUsername,
-          },
-          new_reaction: [{ type: 'emoji', emoji: it.emoji }],
-        } satisfies Types.MessageReactionUpdated),
-        reason: it.shortExplanation ?? '',
-      }
-    }))
-  })()
-
-  const reactingP = (async() => {
-    await U.all(reactions.map(async(reaction) => {
-      await setMessageReaction(chatId, reaction.messageId, reaction.emoji, log)
-    }))
-    completion.sent = true
-  })()
-
-  await U.all([sendingP, reactingP, dbReactionsP])
+  await U.all(promises)
 
   log.I('Done responding')
 }
 
 function isEmptyReply(reply: string) {
+  reply = reply.trim()
   return reply === '<NO_OUTPUT>' || reply === '' || reply === '<>' || reply.length > 4000
 }
 
@@ -848,7 +702,7 @@ export async function sendPrompt(
         type: 'function',
         function: {
           name: 'search',
-          description: 'Perform Search. **Important**: Will fail without express user consent',
+          description: 'Perform Search. **Important**: Will fail without express user consent.',
           parameters: {
             type: "object",
             properties: {
@@ -1491,7 +1345,7 @@ function startTypingTask(chatId: number, log: L.Log) {
     const result = await sendChatAction(chatId, log)
     if(result.status !== 'ok') return
     if(!result.data.ok) {
-      log.I('Typing status failed: ', result.data.description)
+      log.I('Typing status failed: ', [result.data.description])
     }
   }
 

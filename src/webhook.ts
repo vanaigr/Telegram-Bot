@@ -201,13 +201,11 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
     }
     catch(error) {
       l.E([error])
-      if(!completion.sent) {
-        const emojis = ['🙂', '💀', '☠', '😂', '🗿', '😨', '😬', '😭']
-        const text = 'Бот шандарахнулся '
-          + emojis[Math.floor(Math.random() * emojis.length)]
-          + '. /stop чтобы выключить'
-        await Logic.sendMessage(message.chat.id, text, log)
-      }
+      const emojis = ['🙂', '💀', '☠', '😂', '🗿', '😨', '😬', '😭']
+      const text = 'Бот шандарахнулся '
+        + emojis[Math.floor(Math.random() * emojis.length)]
+        + '. /stop чтобы выключить'
+      await Logic.sendMessage(message.chat.id, text, log)
     }
   })()
   waitUntil(replyTask)
