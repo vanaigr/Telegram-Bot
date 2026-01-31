@@ -381,7 +381,7 @@ export async function reply(
     messages,
     chatInfo: await chatInfoP,
     log,
-    caching: true,
+    caching: false,
   })
 
   const promises: Promise<unknown>[] = []
