@@ -631,7 +631,7 @@ export async function reply(
     }
 
     if(finishReason === 'stop') {
-      if(isEmptyReply(reply)) {
+      if(reply.trim() === '') {
         log.W('Model stopped with no output. Going to next iteration')
         openrouterMessages.push({ role: 'system', content: 'Empty Reply. Either reply with text or <NO_OUTPUT>' })
         continue
