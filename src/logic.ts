@@ -386,6 +386,7 @@ export async function reply(
 
   const promises: Promise<unknown>[] = []
 
+  let lastReply = ''
   for(let iteration = 0;; iteration++) {
     if(iteration > 10) {
       log.W('Too many steps')
@@ -560,34 +561,41 @@ export async function reply(
     })()
 
     if(!isEmptyReply(reply)) {
-      promises.push((async() => {
-        log.I('Sending response')
-        const responseResult = await sendMessage(chatId, reply, log)
-        if(responseResult.status !== 'ok') {
-          return
-        }
-        if(!responseResult.data.ok) {
-          log.E([responseResult.data.description])
-          return
-        }
-        const newMessage = responseResult.data.result
-        completion.sent = true
+      if(reply === lastReply) {
+        log.W('Model/OpenRouter doing its nonsense output again')
+      }
+      else {
+        promises.push((async() => {
+          log.I('Sending response')
+          const responseResult = await sendMessage(chatId, reply, log)
+          if(responseResult.status !== 'ok') {
+            return
+          }
+          if(!responseResult.data.ok) {
+            log.E([responseResult.data.description])
+            return
+          }
+          const newMessage = responseResult.data.result
+          completion.sent = true
 
-        log.I('Inserting response')
-        await Db.insertMany(
-          pool,
-          Db.t.messages,
-          Db.d.messages,
-          [{
-            chatId: newMessage.chat.id,
-            messageId: newMessage.message_id,
-            date: fromMessageDate(newMessage.date).toJSON(),
-            type: 'assistant',
-            raw: JSON.stringify(newMessage),
-          }],
-          {}
-        )
-      })())
+          log.I('Inserting response')
+          await Db.insertMany(
+            pool,
+            Db.t.messages,
+            Db.d.messages,
+            [{
+              chatId: newMessage.chat.id,
+              messageId: newMessage.message_id,
+              date: fromMessageDate(newMessage.date).toJSON(),
+              type: 'assistant',
+              raw: JSON.stringify(newMessage),
+            }],
+            {}
+          )
+        })())
+      }
+
+      lastReply = reply
     }
 
     if(reactionsToSend.length > 0) {
