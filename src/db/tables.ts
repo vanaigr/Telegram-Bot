@@ -79,6 +79,7 @@ export const tables = {
         "date": t_timestamp,
         "type": t_messageType,
         "raw": t_json,
+        "generation": t_json,
     },
     "reactions": {
         "chatId": t_bigint,

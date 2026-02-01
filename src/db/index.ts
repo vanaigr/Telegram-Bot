@@ -12,6 +12,7 @@ const modifiedSchema = {
   messages: {
     ...Schema.tables.messages,
     raw: Schema.makeDbType<string, Types.Message>('json'),
+    generation: Schema.makeDbType<string, unknown[]>('json'),
   },
   reactions: {
     ...Schema.tables.reactions,

@@ -19,6 +19,7 @@ model messages {
     date DateTime @db.Timestamp(6)
     type messageType
     raw Json
+    generation Json @default("[]")
 
     @@id([chatId, messageId])
 }

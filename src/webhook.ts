@@ -137,6 +137,7 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
       date: Logic.fromMessageDate(message.date).toJSON(),
       type: 'user',
       raw: JSON.stringify(message),
+      generation: JSON.stringify([]),
     }
     const excluded = Db.makeTable<typeof schema>('excluded')
 
