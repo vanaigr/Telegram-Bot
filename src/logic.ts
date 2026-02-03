@@ -1525,11 +1525,11 @@ export function injectEntities(
       }
       else if(it.type === 'text_link') {
         if(variant === 'begin') {
-          parts.push(['('])
+          parts.push(['['])
         }
         else {
           if(!it.url) log.unreachable([it])
-          parts.push([')['], [it.url ?? ''], [']'])
+          parts.push([']('], [it.url ?? ''], [')'])
         }
       }
       else {
