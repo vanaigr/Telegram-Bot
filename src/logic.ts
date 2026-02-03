@@ -1074,12 +1074,12 @@ export async function messagesToModelInput(
       let text = ''
       if(msg.reply_to_message) {
         const replyText = messageHeaders(msg.reply_to_message, undefined)
-          + messageText(msg.reply_to_message)
+          + messageText(msg.reply_to_message, log)
 
         text += replyText.split('\n').map(it => '> ' + it).join('\n')
         text += '\n'
       }
-      text += messageText(msg).trim()
+      text += messageText(msg, log)
 
       const content: Extract<OpenRouterMessage, { role: 'user' }>['content'] = []
       content.push({ type: 'text', text })
@@ -1365,8 +1365,14 @@ export function messageHeaders(
   return headers
 }
 
-export function messageText(msg: Types.Message) {
-  return (msg.text ?? msg.caption ?? '<no message>').trim()
+export function messageText(msg: Types.Message, log: L.Log) {
+  if(msg.text) {
+    return injectEntities(msg.text, msg.entities ?? [], log).trim()
+  }
+  else if(msg.caption) {
+    return msg.caption.trim()
+  }
+  return '<no message>'
 }
 
 export function userToString(user: Types.User | undefined, full: boolean) {
@@ -1431,3 +1437,43 @@ async function doBackup(pool: Db.DbConnOrPool, data: unknown) {
 }
 
 const validEmojis = ["❤", "👍", "👎", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱", "🤬", "😢", "🎉", "🤩", "🤮", "💩", "🙏", "👌", "🕊", "🤡", "🥱", "🥴", "😍", "🐳", "❤‍🔥", "🌚", "🌭", "💯", "🤣", "⚡", "🍌", "🏆", "💔", "🤨", "😐", "🍓", "🍾", "💋", "🖕", "😈", "😴", "😭", "🤓", "👻", "👨‍💻", "👀", "🎃", "🙈", "😇", "😨", "🤝", "✍", "🤗", "🫡", "🎅", "🎄", "☃", "💅", "🤪", "🗿", "🆒", "💘", "🙉", "🦄", "😘", "💊", "🙊", "😎", "👾", "🤷‍♂", "🤷", "🤷‍♀", "😡"]
+
+export function injectEntities(
+  text: string,
+  entities: Types.MessageEntity[],
+  log: L.Log,
+) {
+  const toProcess = entities
+    .filter(it => it.type === 'text_link' && it.url)
+    .sort((a, b) => a.offset - b.offset)
+
+  const parts: string[] = []
+  let endCodeUnit = 0
+  for(const entity of toProcess) {
+    if(entity.offset < endCodeUnit) {
+      log.unreachable(
+        'Skipping ',
+        [entity],
+        ' for ',
+        [text],
+        ' and ',
+        [entities],
+        '. I implemented this incorrectly',
+      )
+      continue
+    }
+
+    parts.push(
+      text.substring(endCodeUnit, entity.offset),
+      '(',
+      text.substring(entity.offset, entity.offset + entity.length),
+      ')[',
+      entity.url!,
+      ']',
+    )
+    endCodeUnit = entity.offset + entity.length
+  }
+  parts.push(text.substring(endCodeUnit))
+
+  return parts.join('')
+}

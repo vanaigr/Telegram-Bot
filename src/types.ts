@@ -18,6 +18,7 @@ export type Message = {
 
   text?: string
   caption?: string
+  entities?: MessageEntity[]
 
   photo?: PhotoSize[]
   video?: Video
@@ -31,6 +32,13 @@ export type Message = {
   new_chat_members?: User[]
   left_chat_member?: User
   new_chat_title?: string
+}
+
+export type MessageEntity = {
+  type: 'text_link' & {}
+  offset: number
+  length: number
+  url?: string
 }
 
 export type PhotoSize = {
