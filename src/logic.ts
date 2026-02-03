@@ -1242,6 +1242,7 @@ export async function sendMessage(chatId: number, text: string, log: L.Log) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       chat_id: chatId,
+      parse_mode: 'MarkdownV2',
       text,
     }),
   })
