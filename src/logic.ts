@@ -1,7 +1,7 @@
 import streamConsumers from 'node:stream/consumers'
 import util from 'node:util'
 
-import { waitUntil, attachDatabasePool } from '@vercel/functions'
+import { waitUntil } from '@vercel/functions'
 import { OpenRouter } from '@openrouter/sdk'
 import { FileTypeParser } from 'file-type';
 
@@ -1443,37 +1443,264 @@ export function injectEntities(
   entities: Types.MessageEntity[],
   log: L.Log,
 ) {
-  const toProcess = entities
-    .filter(it => it.type === 'text_link' && it.url)
-    .sort((a, b) => a.offset - b.offset)
+  const entitiesByPos = new Map<number, [Types.MessageEntity, 'begin' | 'end'][]>()
+  for(const it of entities) {
+    let beginBin = entitiesByPos.get(it.offset)
+    if(beginBin === undefined) {
+      beginBin = []
+      entitiesByPos.set(it.offset, beginBin)
+    }
+    beginBin.push([it, 'begin'])
 
-  const parts: string[] = []
-  let endCodeUnit = 0
-  for(const entity of toProcess) {
-    if(entity.offset < endCodeUnit) {
-      log.unreachable(
-        'Skipping ',
-        [entity],
-        ' for ',
-        [text],
-        ' and ',
-        [entities],
-        '. I implemented this incorrectly',
-      )
-      continue
+    let endBin = entitiesByPos.get(it.offset + it.length)
+    if(endBin === undefined) {
+      endBin = []
+      entitiesByPos.set(it.offset + it.length, endBin)
+    }
+    endBin.unshift([it, 'end'])
+  }
+
+  const removable = [
+    'bold',
+    'italic',
+    'underline',
+    'strikethrough',
+    'spoiler',
+    'code',
+    'pre',
+  ] as const
+
+  for(let [k, bin] of entitiesByPos) {
+    for(const type of removable) {
+      if(
+        bin.some(it => it[0].type === type && it[1] === 'begin')
+          && bin.some(it => it[0].type === type && it[1] === 'end')
+      ) {
+        bin = bin.filter(it => it[0].type !== type)
+      }
     }
 
-    parts.push(
-      text.substring(endCodeUnit, entity.offset),
-      '(',
-      text.substring(entity.offset, entity.offset + entity.length),
-      ')[',
-      entity.url!,
-      ']',
-    )
-    endCodeUnit = entity.offset + entity.length
+    entitiesByPos.set(k, bin)
   }
-  parts.push(text.substring(endCodeUnit))
+  const byPosList = [...entitiesByPos.entries()]
+    .filter(it => it[1].length > 0)
+    .sort((a, b) => a[0] - b[0])
 
-  return parts.join('')
+  const parts: ([string] | 'quoteBegin' | 'quoteEnd')[] = []
+  let endCodeUnit = 0
+  for(const [pos, list] of byPosList) {
+    parts.push([text.substring(endCodeUnit, pos)])
+    endCodeUnit = pos
+
+    for(const [it, variant] of list) {
+      if(it.type === 'bold') {
+        parts.push(['**'])
+      }
+      else if(it.type === 'italic') {
+        parts.push(['*'])
+      }
+      else if(it.type === 'underline') {
+        parts.push(['__'])
+      }
+      else if(it.type === 'strikethrough') {
+        parts.push(['~~'])
+      }
+      else if(it.type === 'spoiler') {
+        parts.push(['||'])
+      }
+      else if(it.type === 'code') {
+        parts.push(['`'])
+      }
+      else if(it.type === 'pre') {
+        parts.push(['\n```\n'])
+      }
+      else if(it.type === 'blockquote' || it.type === 'expandable_blockquote') {
+        if(variant === 'begin') {
+          parts.push('quoteBegin')
+        }
+        else {
+          parts.push('quoteEnd')
+        }
+      }
+      else if(it.type === 'text_link') {
+        if(variant === 'begin') {
+          parts.push(['('])
+        }
+        else {
+          if(!it.url) log.unreachable([it])
+          parts.push([')['], [it.url ?? ''], [']'])
+        }
+      }
+      else {
+        log.I('Skipping unsupported ', [it])
+      }
+    }
+  }
+  parts.push([text.substring(endCodeUnit)])
+
+  const partsWithQuotes: string[] = []
+  for(let i = 0; i < parts.length; i++) {
+    if(parts[i] === 'quoteBegin') {
+      const handleQuote = (): string => {
+        let quoteParts: string = ''
+
+        for(i++; i < parts.length; i++) {
+          if(parts[i] === 'quoteBegin') {
+            quoteParts += handleQuote()
+          }
+          else if(parts[i]  === 'quoteEnd') {
+            break
+          }
+          else {
+            quoteParts += parts[i][0]
+          }
+        }
+
+        return quoteParts.trim().split('\n').map(it => '> ' + it).join('\n') + '\n'
+      }
+      if(!partsWithQuotes.at(-1)?.endsWith('\n')) {
+        partsWithQuotes.push('\n')
+      }
+      partsWithQuotes.push(handleQuote())
+    }
+    else if(parts[i]  === 'quoteEnd') {
+      log.unreachable([i])
+    }
+    else {
+      partsWithQuotes.push(parts[i][0])
+    }
+  }
+
+  return partsWithQuotes.join('')
+
+  /*
+  const toProcess = entities.toSorted((a, b) => a.offset - b.offset)
+
+  const parts: ([string] | 'quoteBegin' | 'quoteEnd')[] = []
+  let endCodeUnit = 0
+  const toClose: Types.MessageEntity[] = []
+  let toProcessI = 0
+  while(toProcessI < toProcess.length || toClose.length > 0) {
+    const stopAt = Math.min(
+      ...(toProcessI < toProcess.length ? [toProcess[toProcessI].offset] : []),
+      ...toClose.map(it => it.offset + it.length),
+    )
+
+    parts.push([text.substring(endCodeUnit, stopAt)])
+    // entities are applied fifo, so this needs to be backwards
+    for(let i = toClose.length - 1; i > -1; i--) {
+      const it = toClose[i]
+      if(it.offset + it.length > stopAt) continue
+
+      if(it.type === 'bold') {
+        parts.push(['**'])
+      }
+      else if(it.type === 'italic') {
+        parts.push(['*'])
+      }
+      else if(it.type === 'underline') {
+        parts.push(['</u>'])
+      }
+      else if(it.type === 'strikethrough') {
+        parts.push(['~~'])
+      }
+      else if(it.type === 'spoiler') {
+        parts.push(['||'])
+      }
+      else if(it.type === 'code') {
+        parts.push(['`'])
+      }
+      else if(it.type === 'pre') {
+        parts.push(['\n```\n'])
+      }
+      else if(it.type === 'blockquote' || it.type === 'expandable_blockquote') {
+        parts.push('quoteEnd')
+      }
+      else if(it.type === 'text_link') {
+        if(!it.url) log.unreachable([it])
+        parts.push([')['], [it.url ?? ''], [']'])
+      }
+      else {
+        log.I('Skipping unsupported ', [it])
+      }
+
+      toClose.splice(i, 1)
+    }
+
+    (() => {
+      if(toProcessI >= toProcess.length) return
+      const it = toProcess[toProcessI]
+      if(it.offset > stopAt) return
+
+      if(it.type === 'bold') {
+        parts.push(['**'])
+      }
+      else if(it.type === 'italic') {
+        parts.push(['*'])
+      }
+      else if(it.type === 'underline') {
+        parts.push(['<u>'])
+      }
+      else if(it.type === 'strikethrough') {
+        parts.push(['~~'])
+      }
+      else if(it.type === 'spoiler') {
+        parts.push(['||'])
+      }
+      else if(it.type === 'code') {
+        parts.push(['`'])
+      }
+      else if(it.type === 'pre') {
+        parts.push(['\n```\n'])
+      }
+      else if(it.type === 'blockquote' || it.type === 'expandable_blockquote') {
+        parts.push('quoteBegin')
+      }
+      else if(it.type === 'text_link') {
+        parts.push(['('])
+      }
+      else {
+        log.I('Skipping unsupported ', [it])
+      }
+
+      toClose.push(it)
+      toProcessI++
+    })()
+
+    endCodeUnit = stopAt
+  }
+  parts.push([text.substring(endCodeUnit)])
+
+  const partsWithQuotes: string[] = []
+  for(let i = 0; i < parts.length; i++) {
+    if(parts[i] === 'quoteBegin') {
+      const handleQuote = (): string => {
+        let quoteParts: string = ''
+
+        for(i++; i < parts.length; i++) {
+          if(parts[i] === 'quoteBegin') {
+            quoteParts += handleQuote()
+          }
+          else if(parts[i]  === 'quoteEnd') {
+            break
+          }
+          else {
+            quoteParts += parts[i][0]
+          }
+        }
+
+        return quoteParts.trim().split('\n').map(it => '> ' + it).join('\n')
+      }
+      partsWithQuotes.push(handleQuote())
+    }
+    else if(parts[i]  === 'quoteEnd') {
+      log.unreachable([i])
+    }
+    else {
+      partsWithQuotes.push(parts[i][0])
+    }
+  }
+
+  return partsWithQuotes.join('')
+  */
 }
