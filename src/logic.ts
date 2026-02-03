@@ -578,7 +578,11 @@ export async function reply(
 
         promises.push((async() => {
           log.I('Sending response')
-          const responseResult = await sendMessage(chatId, reply, log)
+          const responseResult = await sendMessage(
+            chatId,
+            mdToEntities(reply, log),
+            log,
+          )
           if(responseResult.status !== 'ok') {
             return
           }
@@ -1234,7 +1238,11 @@ async function photoToMessagePart(
 
 }
 
-export async function sendMessage(chatId: number, text: string, log: L.Log) {
+export async function sendMessage(
+  chatId: number,
+  { text, entities }: { text: string, entities: Types.MessageEntity[] },
+  log: L.Log,
+) {
   return await U.request<TelegramWrapper<Types.Message>>({
     url: new URL(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN!}/sendMessage`),
     log: log.addedCtx('sendMessage'),
@@ -1242,8 +1250,8 @@ export async function sendMessage(chatId: number, text: string, log: L.Log) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       chat_id: chatId,
-      parse_mode: 'MarkdownV2',
       text,
+      entities,
     }),
   })
 }
@@ -1368,7 +1376,7 @@ export function messageHeaders(
 
 export function messageText(msg: Types.Message, log: L.Log) {
   if(msg.text) {
-    return injectEntities(msg.text, msg.entities ?? [], log).trim()
+    return entitiesToMd(msg.text, msg.entities ?? [], log).trim()
   }
   else if(msg.caption) {
     return msg.caption.trim()
@@ -1439,7 +1447,11 @@ async function doBackup(pool: Db.DbConnOrPool, data: unknown) {
 
 const validEmojis = ["❤", "👍", "👎", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱", "🤬", "😢", "🎉", "🤩", "🤮", "💩", "🙏", "👌", "🕊", "🤡", "🥱", "🥴", "😍", "🐳", "❤‍🔥", "🌚", "🌭", "💯", "🤣", "⚡", "🍌", "🏆", "💔", "🤨", "😐", "🍓", "🍾", "💋", "🖕", "😈", "😴", "😭", "🤓", "👻", "👨‍💻", "👀", "🎃", "🙈", "😇", "😨", "🤝", "✍", "🤗", "🫡", "🎅", "🎄", "☃", "💅", "🤪", "🗿", "🆒", "💘", "🙉", "🦄", "😘", "💊", "🙊", "😎", "👾", "🤷‍♂", "🤷", "🤷‍♀", "😡"]
 
-export function injectEntities(
+// This is sometimes incorrect, e.g. italic inside spoiler.
+// Because Telegram splits the spoiler into 2 parts (at italic start),
+// and the second part is added after italic, algo considers it inside italic
+// and so closes the spoiler before italic ends.
+export function entitiesToMd(
   text: string,
   entities: Types.MessageEntity[],
   log: L.Log,
@@ -1704,4 +1716,302 @@ export function injectEntities(
 
   return partsWithQuotes.join('')
   */
+}
+
+export function mdToEntities(
+  md: string,
+  log: L.Log,
+) {
+  let text = ''
+  let entities: Types.MessageEntity[] = []
+
+  const t = {
+    bold: -1,
+    italic: -1,
+    underline: -1,
+    strikethrough: -1,
+    spoiler: -1,
+    code: -1,
+    inlineCode: -1,
+    quote: -1,
+    quoteLevel: 0,
+  }
+
+  const parts = mdToTextParts(md)
+  let endCodeUnit = 0
+  for(const it of parts) {
+    if(it.type === 'n') {
+      text += it.text
+      endCodeUnit += it.text.length
+    }
+    else if(it.type === 'd') {
+      if(it.v === 'bold') {
+        if(t.bold === -1) {
+          t.bold = endCodeUnit
+        }
+        else {
+          entities.push({
+            type: 'bold',
+            offset: t.bold,
+            length: endCodeUnit - t.bold,
+          })
+          t.bold = -1
+        }
+      }
+      else if(it.v === 'italic') {
+        if(t.italic === -1) {
+          t.italic = endCodeUnit
+        }
+        else {
+          entities.push({
+            type: 'italic',
+            offset: t.italic,
+            length: endCodeUnit - t.italic,
+          })
+          t.italic = -1
+        }
+      }
+      else if(it.v === 'underline') {
+        if(t.underline === -1) {
+          t.underline = endCodeUnit
+        }
+        else {
+          entities.push({
+            type: 'underline',
+            offset: t.underline,
+            length: endCodeUnit - t.underline,
+          })
+          t.underline = -1
+        }
+      }
+      else if(it.v === 'strikethrough') {
+        if(t.strikethrough === -1) {
+          t.strikethrough = endCodeUnit
+        }
+        else {
+          entities.push({
+            type: 'strikethrough',
+            offset: t.strikethrough,
+            length: endCodeUnit - t.strikethrough,
+          })
+          t.strikethrough = -1
+        }
+      }
+      else if(it.v === 'inlineCode') {
+        if(t.inlineCode === -1) {
+          t.inlineCode = endCodeUnit
+        }
+        else {
+          entities.push({
+            type: 'code',
+            offset: t.inlineCode,
+            length: endCodeUnit - t.inlineCode,
+          })
+          t.inlineCode = -1
+        }
+      }
+      else if(it.v === 'code') {
+        if(t.code === -1) {
+          t.code = endCodeUnit
+        }
+        else {
+          entities.push({
+            type: 'pre',
+            offset: t.code,
+            length: endCodeUnit - t.code,
+          })
+          t.code = -1
+        }
+      }
+      else if(it.v === 'spoiler') {
+        if(t.spoiler === -1) {
+          t.spoiler = endCodeUnit
+        }
+        else {
+          entities.push({
+            type: 'spoiler',
+            offset: t.spoiler,
+            length: endCodeUnit - t.spoiler,
+          })
+          t.spoiler = -1
+        }
+      }
+      else if(it.v === 'quote') {
+        if(it.active) t.quoteLevel++
+        else t.quoteLevel--
+
+        if(t.quote === -1) {
+          t.quote = endCodeUnit
+        }
+        else if(t.quoteLevel === 0) {
+          entities.push({
+            type: 'blockquote',
+            offset: t.quote,
+            length: endCodeUnit - t.quote,
+          })
+          t.quote = -1
+        }
+      }
+      else {
+        log.W('Unknown ', [t])
+      }
+    }
+    else {
+      text += it.text
+      entities.push({
+        type: 'text_link',
+        offset: endCodeUnit,
+        length: it.text.length,
+        url: it.url,
+      })
+      endCodeUnit += it.text.length
+    }
+  }
+
+  return { text, entities }
+}
+
+export function mdToTextParts(
+  md: string
+) {
+  const sections: [string, quote: boolean][] = []
+  for(const line of md.split('\n')) {
+    const prev = sections.at(-1)
+
+    if(line.startsWith('>')) {
+      const l = line.substring(1).trimStart()
+      if(prev?.[1] === true) {
+        sections[sections.length - 1][0] += '\n' + l
+      }
+      else {
+        sections.push([l, true])
+      }
+    }
+    else {
+      if(prev?.[1] === false) {
+        sections[sections.length - 1][0] += '\n' + line
+      }
+      else {
+        sections.push([line, false])
+      }
+    }
+  }
+
+  type TextPart = {
+    type: 'n'
+    text: string
+  } | {
+    type: 'd'
+    active: boolean
+    v: 'bold' | 'italic' | 'underline' | 'strikethrough' | 'inlineCode' | 'code' | 'spoiler' | 'quote'
+  } | {
+    type: 'l'
+    text: string
+    url: string
+  }
+
+  const text: TextPart[] = []
+  const f = {
+    bold: false,
+    italic: false,
+    underline: false,
+    strikethrough: false,
+    spoiler: false,
+  }
+
+  for(const [section, quote] of sections) {
+    if(quote) {
+      text.push({ type: 'd', v: 'quote', active: true })
+      text.push(...mdToTextParts(section))
+      text.push({ type: 'd', v: 'quote', active: false })
+    }
+    else {
+      for(let i = 0; i < section.length;) {
+        if(section[i] === '*' && section[i + 1] === '*') {
+          f.bold = !f.bold
+          text.push({ type: 'd', v: 'bold', active: f.bold })
+          i += 2
+        }
+        else if(section[i] === '*') {
+          f.italic = !f.italic
+          text.push({ type: 'd', v: 'italic', active: f.italic })
+          i += 1
+        }
+        else if(section[i] === '_' && section[i + 1] === '_') {
+          f.underline = !f.underline
+          text.push({ type: 'd', v: 'underline', active: f.underline })
+          i += 2
+        }
+        else if(section[i] === '~' && section[i + 1] === '~') {
+          f.strikethrough = !f.strikethrough
+          text.push({ type: 'd', v: 'strikethrough', active: f.strikethrough })
+          i += 2
+        }
+        else if(section[i] === '|' && section[i + 1] === '|') {
+          f.spoiler = !f.spoiler
+          text.push({ type: 'd', v: 'spoiler', active: f.spoiler })
+          i += 2
+        }
+        else if(section[i] === '`' && section[i + 1] === '`' && section[i + 2] === '`') {
+          text.push({ type: 'd', v: 'code', active: true })
+          i += 3
+          const end = notStupidEnd(section, it => it.indexOf('```', i))
+          text.push({ type: 'n', text: section.substring(i, end) })
+          text.push({ type: 'd', v: 'code', active: false })
+          i = end + 3
+        }
+        else if(section[i] === '`') {
+          text.push({ type: 'd', v: 'inlineCode', active: true })
+          i += 1
+          const end = notStupidEnd(section, it => it.indexOf('`', i))
+          text.push({ type: 'n', text: section.substring(i, end) })
+          text.push({ type: 'd', v: 'inlineCode', active: false })
+          i = end + 1
+        }
+        else if(section[i] === '[') {
+          const textEnd = section.indexOf(']', i + 1)
+          if(textEnd !== -1) {
+            const urlStart = section.indexOf('(', textEnd + 1)
+            if(urlStart !== -1) {
+              const urlEnd = section.indexOf(')', urlStart + 1)
+              if(urlEnd !== -1) {
+                text.push({
+                  type: 'l',
+                  text: section.substring(i + 1, textEnd),
+                  url: section.substring(urlStart + 1, urlEnd),
+                })
+                i = urlEnd + 1
+                continue
+              }
+            }
+          }
+        }
+
+        {
+          let end = i + notStupidEnd(
+            section.substring(i), // 🤡
+            it => it.search(/[*_~|`\[]/),
+          )
+
+          text.push({ type: 'n', text: section.substring(i, end) })
+          i = end
+        }
+      }
+    }
+  }
+
+  if(f.bold) text.push({ type: 'd', v: 'bold', active: false })
+  if(f.italic) text.push({ type: 'd', v: 'italic', active: false })
+  if(f.underline) text.push({ type: 'd', v: 'underline', active: false })
+  if(f.strikethrough) text.push({ type: 'd', v: 'strikethrough', active: false })
+  if(f.spoiler) text.push({ type: 'd', v: 'spoiler', active: false })
+  if(f.spoiler) text.push({ type: 'd', v: 'spoiler', active: false })
+
+  return text
+}
+
+function notStupidEnd(str: string, op: (it: string) => number) {
+  const end = op(str)
+  if(end === -1) return str.length
+  return end
 }

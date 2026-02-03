@@ -103,7 +103,7 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
       + emojis[Math.floor(Math.random() * emojis.length)]
       + '. /stop чтобы выключить'
 
-    await Logic.sendMessage(message.chat.id, text, log)
+    await Logic.sendMessage(message.chat.id, { text, entities: [] }, log)
     return new Response()
   }
   else if(message.text?.startsWith('/stop')) {
@@ -121,7 +121,7 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
       + emojis[Math.floor(Math.random() * emojis.length)]
       + '. /start чтобы включить'
 
-    await Logic.sendMessage(message.chat.id, text, log)
+    await Logic.sendMessage(message.chat.id, { text, entities: [] }, log)
     return new Response()
   }
 
@@ -206,7 +206,7 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
       const text = 'Бот шандарахнулся '
         + emojis[Math.floor(Math.random() * emojis.length)]
         + '. /stop чтобы выключить'
-      await Logic.sendMessage(message.chat.id, text, log)
+      await Logic.sendMessage(message.chat.id, { text, entities: [] }, log)
     }
   })()
   waitUntil(replyTask)
@@ -226,7 +226,7 @@ async function getChatWhitelistInfo(pool: Db.DbPool, log: L.Log, chatId: number)
 
     const emojis = ['🙂', '😳', '👉👈', '😡']
     const text = 'А вы кто ' + emojis[Math.floor(Math.random() * emojis.length)] + '?'
-    await Logic.sendMessage(chatId, text, log)
+    await Logic.sendMessage(chatId, { text, entities: [] }, log)
 
     return undefined
   }
