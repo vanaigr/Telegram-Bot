@@ -370,12 +370,9 @@ export async function reply(
     await U.delay(until)
   }
 
-  const allMessages = await fetchMessages(pool, log, chatId)
-
-  const messages = allMessages.slice(Math.max(
-    allMessages.length - 30,
-  ))
-  const respondsToMessageId = messages.at(-1)!.messageId
+  const messages = await fetchMessages(pool, log, chatId)
+  const respondsToMessage = messages.at(-1)!
+  const respondsToMessageId = respondsToMessage.msg.message_id
 
   const openrouterMessages: OpenRouterMessage[] = await messagesToModelInput({
     messages,
@@ -573,9 +570,6 @@ export async function reply(
         log.W('Model/OpenRouter doing its nonsense output again')
       }
       else {
-        const messageGeneration = thisMessageGeneration
-        thisMessageGeneration = []
-
         promises.push((async() => {
           log.I('Sending response')
           const responseResult = await sendMessage(
@@ -604,7 +598,7 @@ export async function reply(
               date: fromMessageDate(newMessage.date).toJSON(),
               type: 'assistant',
               raw: JSON.stringify(newMessage),
-              generation: JSON.stringify(messageGeneration),
+              generation: JSON.stringify([]),
             }],
             {}
           )
@@ -663,6 +657,17 @@ export async function reply(
     log.E('Non-continue finishReason: ', [finishReason], '. Stopping')
     break
   }
+
+  await Db.queryRaw(pool,
+    'update', Db.t.messages, 'set', Db.list([
+      Db.setJson(Db.t.messages.generation, [
+        ...respondsToMessage.generation,
+        ...thisMessageGeneration,
+      ])
+    ]),
+    'where', Db.eq(Db.t.messages.chatId, Db.param(BigInt(chatId))),
+    'and', Db.eq(Db.t.messages.messageId, Db.param(BigInt(respondsToMessage.msg.message_id))),
+  )
 
   cancelTypingStatus()
 
@@ -778,19 +783,12 @@ type Reaction = {
 }
 
 type MessageWithAttachments = {
-  messageId: bigint
-
-  type: 'normal'
   msg: Types.Message
   reactions: Reaction[]
   photos: Photo[]
   video: Video | undefined
   videoNote: VideoNote | undefined
-} | {
-  messageId: bigint
-
-  type: 'generation'
-  messages: OpenRouterMessage[]
+  generation: OpenRouterMessage[]
 }
 
 export async function fetchMessages(
@@ -802,7 +800,6 @@ export async function fetchMessages(
   const t = Db.t.messages
   const messagesRaw = await Db.query(conn,
     'select', [
-      t.messageId,
       t.raw,
       t.generation,
       Db.named(
@@ -823,26 +820,19 @@ export async function fetchMessages(
     'from', t,
     'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
     ...(ctx?.lastMessage !== undefined ? ['and', t.messageId, '<=', Db.param(ctx.lastMessage)] : []),
-    'order by', t.messageId, 'asc', // date resolution is too low
-  )
+    'and', Db.eq(t.type, Db.param('user')),
+    'order by', t.messageId, 'desc', // date resolution is too low
+    'limit 20',
+  ).then(it => it.reverse())
   if(messagesRaw.length === 0) {
     log.unreachable()
     return []
   }
 
-  const messages = messagesRaw.map(({ messageId, raw: msg, generation, reactions }): MessageWithAttachments => {
-    if(generation.length > 0) {
-      return {
-        messageId,
-        type: 'generation',
-        messages: generation as OpenRouterMessage[],
-      }
-    }
-
+  const messages = messagesRaw.map(({ raw: msg, generation, reactions }): MessageWithAttachments => {
     return {
-      messageId,
-      type: 'normal',
       msg,
+      generation: generation as OpenRouterMessage[],
       reactions: (reactions ?? []).map((it: any) => {
         return {
           info: it.raw as Types.MessageReactionUpdated,
@@ -904,9 +894,8 @@ export async function fetchMessages(
   if(ctx?.skipImages !== true) {
     // Insertion order is from latest to earliest.
     const fileUniqueIds = new Set<string>()
-    for(let off = 0; off < Math.min(20, messages.length); off++) {
+    for(let off = 0; off < Math.min(10, messages.length); off++) {
       const message = messages[messages.length - 1 - off]
-      if(message.type !== 'normal') continue
 
       const { photos, video, videoNote } = message
       for(let j = photos.length - 1; j > -1; j--) {
@@ -930,8 +919,6 @@ export async function fetchMessages(
     const photoRowsById = new Map(photoRows.map(it => [it.fileUniqueId, it]))
 
     for(const message of messages) {
-      if(message.type !== 'normal') continue
-
       for(const photo of message.photos) {
         const photoRow = photoRowsById.get(photo.file_unique_id)
         if(photoRow !== undefined) {
@@ -1021,154 +1008,150 @@ export async function messagesToModelInput(
 */
 
   for(const message of messages) {
-    if(message.type === 'normal') {
-      const { msg, photos, video, videoNote, reactions } = message
-      if(msg.new_chat_title !== undefined) {
-        openrouterMessages.push({
-          role: 'user',
-          content: [{
-            type: 'text',
-            text: JSON.stringify({ newChatTitle: msg.new_chat_title }),
-          }],
-        })
-        continue
-      }
-      else if(msg.new_chat_members !== undefined) {
-        openrouterMessages.push({
-          role: 'user',
-          content: [{
-            type: 'text',
-            text: JSON.stringify({
-              newChatMembers: msg.new_chat_members.map(it => userToString(it, true)),
-            }),
-          }],
-        })
-        continue
-      }
-      else if(msg.left_chat_member !== undefined) {
-        openrouterMessages.push({
-          role: 'user',
-          content: [{
-            type: 'text',
-            text: JSON.stringify({
-              leftChatMember: userToString(msg.left_chat_member, true),
-            }),
-          }],
-        })
-        continue
-      }
-
+    const { msg, photos, video, videoNote, reactions } = message
+    if(msg.new_chat_title !== undefined) {
       openrouterMessages.push({
-        role: 'system',
+        role: 'user',
         content: [{
           type: 'text',
-          text: messageHeaders(msg, reactions),
+          text: JSON.stringify({ newChatTitle: msg.new_chat_title }),
         }],
       })
-
-      if(msg.from?.username === botUsername) {
-        openrouterMessages.push({
-          role: 'assistant',
-          content: [{ type: 'text', text: msg.text ?? '<ERROR: NO TEXT>' }],
-        })
-        continue
-      }
-
-      let text = ''
-      if(msg.reply_to_message) {
-        const replyText = messageHeaders(msg.reply_to_message, undefined)
-          + messageText(msg.reply_to_message, log)
-
-        text += replyText.split('\n').map(it => '> ' + it).join('\n')
-        text += '\n'
-      }
-      text += messageText(msg, log)
-
-      const content: Extract<OpenRouterMessage, { role: 'user' }>['content'] = []
-      content.push({ type: 'text', text })
-
-      for(const photo of photos) {
-        content.push(await photoToMessagePart(log, photo, '<image not available>', photoQuota))
-      }
-      if(video) {
-        content.push({
-          type: 'text',
-          text: '<Video '
-            + (video.info.file_name ?? 'no name')
-            + ', '
-            + video.info.duration
-            + 'sec not available>\nThumbnail: '
-        })
-        if(video.thumbnail) {
-          content.push(await photoToMessagePart(
-            log,
-            video.thumbnail,
-            '<thumbnail not available>',
-            photoQuota
-          ))
-        }
-      }
-      if(videoNote) {
-        content.push({
-          type: 'text',
-          text: `<Circular video, ${videoNote.info.duration}sec>\nThumbnail: `
-        })
-        if(videoNote.thumbnail) {
-          content.push(await photoToMessagePart(
-            log,
-            videoNote.thumbnail,
-            '<thumbnail not available>',
-            photoQuota
-          ))
-        }
-      }
-      if(msg.voice) {
-        content.push({
-          type: 'text' as const,
-          text: `<voice, ${msg.voice.duration}sec not available>`,
-        })
-      }
-      if(msg.audio) {
-        content.push({
-          type: 'text' as const,
-          text: '<audio, '
-            + (msg.audio.title ?? msg.audio.file_name ?? 'unknown')
-            + ' by '
-            + (msg.audio.performer ?? 'unknown')
-            + ', '
-            + msg.audio.duration
-            + 'sec not available>',
-        })
-      }
-      if(msg.document) {
-        content.push({
-          type: 'text' as const,
-          text: '<document '
-            + (msg.document.mime_type ?? 'application/octet-stream')
-            + ' '
-            + (msg.document.file_name ?? 'no name')
-            + ' not available>',
-        })
-      }
-      if(msg.location) {
-        content.push({
-          type: 'text' as const,
-          text: `<location lat: ${msg.location.latitude}, lon: ${msg.location.longitude}>`,
-        })
-      }
-      if(msg.sticker) {
-        content.push({
-          type: 'text' as const,
-          text: `<sticker ${msg.sticker.emoji ?? 'not available'}>`,
-        })
-      }
-
-      openrouterMessages.push({ role: 'user', content })
+      continue
     }
-    else {
-      for(const msg of message.messages) {
-        openrouterMessages.push(msg)
+    else if(msg.new_chat_members !== undefined) {
+      openrouterMessages.push({
+        role: 'user',
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            newChatMembers: msg.new_chat_members.map(it => userToString(it, true)),
+          }),
+        }],
+      })
+      continue
+    }
+    else if(msg.left_chat_member !== undefined) {
+      openrouterMessages.push({
+        role: 'user',
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            leftChatMember: userToString(msg.left_chat_member, true),
+          }),
+        }],
+      })
+      continue
+    }
+
+    openrouterMessages.push({
+      role: 'system',
+      content: [{
+        type: 'text',
+        text: messageHeaders(msg, reactions),
+      }],
+    })
+
+    if(msg.from?.username === botUsername) {
+      openrouterMessages.push({
+        role: 'assistant',
+        content: [{ type: 'text', text: msg.text ?? '<ERROR: NO TEXT>' }],
+      })
+      continue
+    }
+
+    let text = ''
+    if(msg.reply_to_message) {
+      const replyText = messageHeaders(msg.reply_to_message, undefined)
+        + messageText(msg.reply_to_message, log)
+
+      text += replyText.split('\n').map(it => '> ' + it).join('\n')
+      text += '\n'
+    }
+    text += messageText(msg, log)
+
+    const content: Extract<OpenRouterMessage, { role: 'user' }>['content'] = []
+    content.push({ type: 'text', text })
+
+    for(const photo of photos) {
+      content.push(await photoToMessagePart(log, photo, '<image not available>', photoQuota))
+    }
+    if(video) {
+      content.push({
+        type: 'text',
+        text: '<Video '
+          + (video.info.file_name ?? 'no name')
+          + ', '
+          + video.info.duration
+          + 'sec not available>\nThumbnail: '
+      })
+      if(video.thumbnail) {
+        content.push(await photoToMessagePart(
+          log,
+          video.thumbnail,
+          '<thumbnail not available>',
+          photoQuota
+        ))
       }
+    }
+    if(videoNote) {
+      content.push({
+        type: 'text',
+        text: `<Circular video, ${videoNote.info.duration}sec>\nThumbnail: `
+      })
+      if(videoNote.thumbnail) {
+        content.push(await photoToMessagePart(
+          log,
+          videoNote.thumbnail,
+          '<thumbnail not available>',
+          photoQuota
+        ))
+      }
+    }
+    if(msg.voice) {
+      content.push({
+        type: 'text' as const,
+        text: `<voice, ${msg.voice.duration}sec not available>`,
+      })
+    }
+    if(msg.audio) {
+      content.push({
+        type: 'text' as const,
+        text: '<audio, '
+          + (msg.audio.title ?? msg.audio.file_name ?? 'unknown')
+          + ' by '
+          + (msg.audio.performer ?? 'unknown')
+          + ', '
+          + msg.audio.duration
+          + 'sec not available>',
+      })
+    }
+    if(msg.document) {
+      content.push({
+        type: 'text' as const,
+        text: '<document '
+          + (msg.document.mime_type ?? 'application/octet-stream')
+          + ' '
+          + (msg.document.file_name ?? 'no name')
+          + ' not available>',
+      })
+    }
+    if(msg.location) {
+      content.push({
+        type: 'text' as const,
+        text: `<location lat: ${msg.location.latitude}, lon: ${msg.location.longitude}>`,
+      })
+    }
+    if(msg.sticker) {
+      content.push({
+        type: 'text' as const,
+        text: `<sticker ${msg.sticker.emoji ?? 'not available'}>`,
+      })
+    }
+
+    openrouterMessages.push({ role: 'user', content })
+    for(const msg of message.generation) {
+      openrouterMessages.push(msg)
     }
   }
 
