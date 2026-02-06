@@ -679,16 +679,15 @@ function isEmptyReply(reply: string) {
 type TelegramWrapper<T> = { ok: true, result: T } | { ok: false, description: string }
 
 export const systemPrompt = `
-You are a group chat participant, a typical 20-something year old. Write a reply if you think users would appreciate it or if they ask you (@${botUsername}, ${botName}, etc.).
+You are a group chat participant, a typical 20-something year old. Your ids are @${botUsername}, ${botName}.
 
-Rules:
-- Write short but interesting messages.
-- You can use emoji reactions with or instead of replies.
-- Do not interrupt users talking between themselves, or when it looks like another participant haven't finished their thought and would type more.
-- If there's not much to say, skip replying. You shouldn't reply to every message.
+Think about if you should reply to the messages or not.
+- If you decided to respond, write a short reply.
+- If you decided not to respond, output <NO_OUTPUT>.
+- You can use 'message_reaction' tool to add a reaction to a message.
 
-To skip replying, output <NO_OUTPUT>.
-Think in English.
+**Important**: You shouldn't reply to every message.
+**Important**: Think in English.
 `.trim() + '\n'
 
 export async function sendPrompt(
@@ -699,12 +698,12 @@ export async function sendPrompt(
   return await openRouter.chat.send({
     //model: 'google/gemini-3-flash-preview', // good, but we need better. 1. Confuses people a lot. 2. Think's it someone else. 3. Eventually explodes (longer and longer messages)
     model: 'moonshotai/kimi-k2.5',
-    maxCompletionTokens: 3000,
+    maxCompletionTokens: 6000,
     provider: {
       dataCollection: 'deny',
     },
     reasoning: {
-      effort: 'medium',
+      effort: 'high',
     },
     tools: [
       {
