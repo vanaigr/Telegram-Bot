@@ -8,31 +8,64 @@ import type * as Types from './types.ts'
 import * as Logic from './logic.ts'
 
 export async function POST(req: Request): Promise<Response> {
-  const log = L.makeLogger(undefined, undefined)
+  const axiomLogger = (() => {
+    const token = process.env.AXIOM_TOKEN
+    const dataset = process.env.AXIOM_DATASET
+    const reqId = req.headers.get('x-vercel-id') ?? '';
 
-  log.I('Received webhook')
-  //log.I([req.headers])
-  const token = req.headers.get('x-telegram-bot-api-secret-token')
-  if(token === '' || token !== process.env.TELEGRAM_WEBHOOK_SECRET) {
-    log.W('Unexpected webhook token ', [token])
-    return new Response('', { status: 401 })
-  }
+    if(!token || !dataset) return
 
-  const body = await req.json()
-  //log.I('Body: ', [body])
+    const savedLogs: { reqId: string, channel: string, _time: string, text: string }[] = []
 
-  if(body.message !== undefined) {
-    return await handleMessage(log, body.message, false)
+    return {
+      logger: (channel: string, timestamp: string, text: string) => {
+        savedLogs.push({ reqId, channel, _time: timestamp, text })
+      },
+      flush: async() => {
+        const result = await fetch('https://us-east-1.aws.edge.axiom.co/v1/ingest/' + encodeURIComponent(dataset), {
+          method: 'POST',
+          headers: {
+            authorization: 'Bearer ' + token,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify(savedLogs),
+        }).then(it => it.json())
+        console.log(result)
+      }
+    }
+  })()
+
+  const log = L.makeLogger(undefined, axiomLogger)
+  if(axiomLogger === undefined) log.W('Not using axiom')
+
+  try {
+    log.I('Received webhook')
+    //log.I([req.headers])
+    const token = req.headers.get('x-telegram-bot-api-secret-token')
+    if(token === '' || token !== process.env.TELEGRAM_WEBHOOK_SECRET) {
+      log.W('Unexpected webhook token ', [token])
+      return new Response('', { status: 401 })
+    }
+
+    const body = await req.json()
+    //log.I('Body: ', [body])
+
+    if(body.message !== undefined) {
+      return await handleMessage(log, body.message, false)
+    }
+    else if(body.edited_message !== undefined) {
+      return await handleMessage(log, body.edited_message, true)
+    }
+    else if(body.message_reaction !== undefined) {
+      return await handleReaction(log, body.message_reaction)
+    }
+    else {
+      log.I('What did it send to me? ', [body])
+      return new Response('')
+    }
   }
-  else if(body.edited_message !== undefined) {
-    return await handleMessage(log, body.edited_message, true)
-  }
-  else if(body.message_reaction !== undefined) {
-    return await handleReaction(log, body.message_reaction)
-  }
-  else {
-    log.I('What did it send to me? ', [body])
-    return new Response('')
+  finally {
+    await log.flushMessages()
   }
 }
 

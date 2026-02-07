@@ -29,11 +29,6 @@ export type Log = {
 
 export type Channel = 'I' | 'W' | 'E';
 
-type LoggerProvider = never
-
-export type OtelLogger = ReturnType<LoggerProvider['getLogger']>;
-const severityTexts = { E: 'ERROR', I: 'INFO', W: 'WARN' } as const;
-
 type FileLog = {
   current: Promise<unknown> | undefined;
   pending: string;
@@ -66,7 +61,7 @@ export function makeStubLogger(): Log {
 
 export function makeLogger(
   logPath: string | undefined,
-  otel: { logger: OtelLogger; flush: () => Promise<void> } | undefined,
+  otel: { logger: (channel: Channel, timestamp: string, text: string) => void; flush: () => Promise<void> } | undefined,
 ): Log {
   const fileLog = (() => {
     if (logPath === undefined) return;
@@ -99,15 +94,9 @@ export function makeLogger(
       writeFileLog(fileLog);
     }
 
-    /*
     if (otel) {
-      otel.logger.emit({
-        timestamp: dt.epochMilliseconds,
-        severityText: severityTexts[channel],
-        body: textMessage,
-      });
+      otel.logger(channel, new Date().toJSON(), textMessage)
     }
-    */
   };
 
   const flush = async () => {

@@ -48,6 +48,12 @@ Requires node >= 24 (mine is `24.12.0`) and pnpm >= 10 (mine is `10.26.1`)
 4. Edit `scripts/setupWebhook.ts` to point at your project
 5. Run `TELEGRAM_BOT_TOKEN=<your token> TELEGRAM_WEBHOOK_SECRET=<your secret> node scripts/setupWebhook.ts` to set up Telegram webhook
 
+### Axiom (optional)
+
+1. Create an account on https://axiom.co, setup an org and a dataset
+2. Generate auth token and add it as `AXIOM_TOKEN` env var in Vercel
+3. Put your dataset name as `AXIOM_DATASET` env var in Vercel.
+
 ## Deploying the bot
 
 1. Run `pnpm exec vercel --prod` to deploy your bot.
