@@ -380,6 +380,23 @@ export async function reply(
     log,
     caching: false,
   })
+  /*
+  if(Math.random() < 0.7) {
+    log.I('Asked bot to not respond')
+    openrouterMessages.push({
+      role: 'system',
+      content: '**Override**: Do not respond unless the users are talking to you, or want you or anyone to respond, or'
+    })
+  }
+  else {
+    log.I('Skipped asking bot to not respond')
+  }
+  */
+  openrouterMessages.push({
+    role: 'system',
+    content: '***Reminder**: do not respond to every message'
+  })
+
   let thisMessageGeneration: OpenRouterMessage[] = []
 
   const promises: Promise<unknown>[] = []
