@@ -394,7 +394,7 @@ export async function reply(
   */
   openrouterMessages.push({
     role: 'system',
-    content: '***Reminder**: do not respond to every message'
+    content: 'Reminder: consider whether you should respond. Think in English.'
   })
 
   let thisMessageGeneration: OpenRouterMessage[] = []
@@ -1727,6 +1727,7 @@ export function mdToEntities(
   const t = {
     bold: -1,
     italic: -1,
+    bolditalic: -1,
     underline: -1,
     strikethrough: -1,
     spoiler: -1,
@@ -1902,7 +1903,7 @@ export function mdToTextParts(
   } | {
     type: 'd'
     active: boolean
-    v: 'bold' | 'italic' | 'underline' | 'strikethrough' | 'inlineCode' | 'code' | 'spoiler' | 'quote'
+    v: 'bold' | 'italic' | 'underline' | 'strikethrough' | 'inlineCode' | 'code' | 'spoiler' | 'quote' | 'bolditalic'
   } | {
     type: 'l'
     text: string
@@ -1910,12 +1911,36 @@ export function mdToTextParts(
   }
 
   const text: TextPart[] = []
-  const f = {
-    bold: false,
-    italic: false,
-    underline: false,
-    strikethrough: false,
-    spoiler: false,
+  const fButNotQuiteBcTypescript = {
+    bold: undefined,
+    italic: undefined,
+    bolditalic: undefined,
+    underline: undefined,
+    strikethrough: undefined,
+    spoiler: undefined,
+  }
+  const f: Record<keyof typeof fButNotQuiteBcTypescript, { i: number } | undefined> = {
+    ...fButNotQuiteBcTypescript,
+  }
+
+  const flip = (name: keyof typeof f) => {
+    if(f[name] === undefined) {
+      f[name] = { i: text.length }
+      return true
+    }
+    else {
+      f[name] = undefined
+      return false
+    }
+  }
+  const closeBold = () => {
+    if(f.bold) text[f.bold.i] = { type: 'n', text: '**' }
+  }
+  const closeItalic = () => {
+    if(f.italic) text[f.italic.i] = { type: 'n', text: '*' }
+  }
+  const closeBolditalic = () => {
+    if(f.bolditalic) text[f.bolditalic.i] = { type: 'n', text: '***' }
   }
 
   for(const [section, quote] of sections) {
@@ -1926,29 +1951,34 @@ export function mdToTextParts(
     }
     else {
       for(let i = 0; i < section.length;) {
-        if(section[i] === '*' && section[i + 1] === '*') {
-          f.bold = !f.bold
-          text.push({ type: 'd', v: 'bold', active: f.bold })
+        if(section[i] === '*' && section[i + 1] === '*' && section[i + 2] === '*') {
+          closeBold()
+          closeItalic()
+          text.push({ type: 'd', v: 'bolditalic', active: flip('bolditalic') })
+          i += 3
+        }
+        else if(section[i] === '*' && section[i + 1] === '*') {
+          closeItalic()
+          closeBolditalic()
+          text.push({ type: 'd', v: 'bold', active: flip('bold') })
           i += 2
         }
         else if(section[i] === '*') {
-          f.italic = !f.italic
-          text.push({ type: 'd', v: 'italic', active: f.italic })
+          closeBold()
+          closeBolditalic()
+          text.push({ type: 'd', v: 'italic', active: flip('italic') })
           i += 1
         }
         else if(section[i] === '_' && section[i + 1] === '_') {
-          f.underline = !f.underline
-          text.push({ type: 'd', v: 'underline', active: f.underline })
+          text.push({ type: 'd', v: 'underline', active: flip('underline') })
           i += 2
         }
         else if(section[i] === '~' && section[i + 1] === '~') {
-          f.strikethrough = !f.strikethrough
-          text.push({ type: 'd', v: 'strikethrough', active: f.strikethrough })
+          text.push({ type: 'd', v: 'strikethrough', active: flip('strikethrough') })
           i += 2
         }
         else if(section[i] === '|' && section[i + 1] === '|') {
-          f.spoiler = !f.spoiler
-          text.push({ type: 'd', v: 'spoiler', active: f.spoiler })
+          text.push({ type: 'd', v: 'spoiler', active: flip('spoiler') })
           i += 2
         }
         else if(section[i] === '`' && section[i + 1] === '`' && section[i + 2] === '`') {
@@ -1999,12 +2029,12 @@ export function mdToTextParts(
     }
   }
 
-  if(f.bold) text.push({ type: 'd', v: 'bold', active: false })
-  if(f.italic) text.push({ type: 'd', v: 'italic', active: false })
-  if(f.underline) text.push({ type: 'd', v: 'underline', active: false })
-  if(f.strikethrough) text.push({ type: 'd', v: 'strikethrough', active: false })
-  if(f.spoiler) text.push({ type: 'd', v: 'spoiler', active: false })
-  if(f.spoiler) text.push({ type: 'd', v: 'spoiler', active: false })
+  closeBold()
+  closeItalic()
+  closeBolditalic()
+  if(f.underline) text[f.underline.i] = { type: 'n', text: '__' }
+  if(f.strikethrough) text[f.strikethrough.i] = { type: 'n', text: '~~' }
+  if(f.spoiler) text[f.spoiler.i] = { type: 'n', text: '||' }
 
   return text
 }
