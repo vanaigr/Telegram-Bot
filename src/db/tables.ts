@@ -146,4 +146,18 @@ export const tables = {
         "date": t_timestamp,
         "raw": t_json,
     },
+    "linkInfo": {
+        "url": t_text,
+        "title": t_textNullable,
+        "type": t_textNullable,
+        "image": t_textNullable,
+        "status": t_downloadStatus,
+        "downloadStartDate": t_timestamp,
+    },
+    "images": {
+        "key": t_text,
+        "status": t_downloadStatus,
+        "bytes": t_bytea,
+        "downloadStartDate": t_timestamp,
+    },
 } as const

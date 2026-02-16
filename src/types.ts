@@ -32,6 +32,10 @@ export type Message = {
   new_chat_members?: User[]
   left_chat_member?: User
   new_chat_title?: string
+
+  link_preview_options?: {
+    url?: string
+  }
 }
 
 export type MessageEntity = {

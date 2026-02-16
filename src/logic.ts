@@ -10,6 +10,8 @@ import * as T from './lib/temporal.ts'
 import * as L from './lib/log.ts'
 import * as U from './lib/util.ts'
 import type * as Types from './types.ts'
+import { dbTypes } from './db/tables.ts';
+import { link } from 'node:fs';
 
 export const botName = 'балбес'
 export const botUsername = 'balbes52_bot'
@@ -163,6 +165,68 @@ export async function startPhotoTask(
   }
 }
 
+export async function startLinkTask(
+  pool: Db.DbPool,
+  baseLog: L.Log,
+  message: Types.Message
+) {
+  const textLinks = (() => {
+    const url = message.link_preview_options?.url
+    if(url) return [url]
+
+    return []
+  })()
+  baseLog.I('Checking ', [textLinks.length], ' urls')
+
+  if(textLinks.length === 0) return
+
+  const [toFetch, time] = await Db.timedTran(pool, async(db) => {
+    const now = T.Now.instant().toJSON()
+    const t = Db.t.linkInfo
+    const schema = Db.d.linkInfo
+
+    const existingList = await Db.query(db,
+      'select', [t.url],
+      'from', t,
+      'where', Db.inArr(t.url, textLinks),
+    )
+    const existingSet = new Set(existingList.map(it => it.url))
+    baseLog.I('Found ', [existingSet.size], ' existing')
+
+    const toFetch: string[] = []
+    const toInsert: Db.ForOutput<typeof schema>[] = []
+    for(const url of textLinks) {
+      if(existingSet.has(url)) continue
+
+      toFetch.push(url)
+      toInsert.push({
+        url: url,
+        title: null,
+        type: null,
+        image: null,
+        status: 'downloading',
+        downloadStartDate: now,
+      })
+    }
+
+    baseLog.I('Inserting ', [toInsert.length], ' new links')
+    await Db.insertMany(db, t, schema, toInsert, {})
+    return toFetch
+  })
+
+  for(const url of toFetch) {
+    waitUntil((async() => {
+      const log = baseLog.addedCtx('link ', [url])
+      try {
+        await downloadLink(pool, log, url)
+      }
+      catch(err) {
+        log.E('While downloading link: ', [err])
+      }
+    })())
+  }
+}
+
 export async function downloadPhoto(
   pool: Db.DbPool,
   log: L.Log,
@@ -233,6 +297,176 @@ export async function downloadPhoto(
       ]),
       'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
       'and', Db.eq(t.fileUniqueId, Db.param(photo.file_unique_id)),
+    )
+  }
+}
+
+export async function downloadLink(
+  pool: Db.DbPool,
+  log: L.Log,
+  url: string
+) {
+  log.I('Downloading link')
+
+  const t = Db.t.linkInfo
+
+  try {
+    log.I('Fetching URL')
+
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; TelegramBot/1.0)',
+      },
+    })
+
+    if (!response.ok) {
+      log.E('Response status: ', [response.status])
+      throw new Error()
+    }
+
+    const html = await response.text()
+    log.I('Got HTML, parsing')
+
+    // Extract Open Graph tags (handle both property="og:*" content="*" and content="*" property="og:*")
+    const titleMatch = html.match(/<meta\s+(?:property=["']og:title["']\s+content=["']([^"']+)["']|content=["']([^"']+)["']\s+property=["']og:title["'])/i)
+      || html.match(/<title>([^<]+)<\/title>/i)
+    const typeMatch = html.match(/<meta\s+(?:property=["']og:type["']\s+content=["']([^"']+)["']|content=["']([^"']+)["']\s+property=["']og:type["'])/i)
+    const imageMatch = html.match(/<meta\s+(?:property=["']og:image["']\s+content=["']([^"']+)["']|content=["']([^"']+)["']\s+property=["']og:image["'])/i)
+
+    const title = (titleMatch?.[1] ?? titleMatch?.[2]) ?? null
+    const type = (typeMatch?.[1] ?? typeMatch?.[2]) ?? null
+    const image = (imageMatch?.[1] ?? imageMatch?.[2]) ?? null
+
+    log.I('Parsed - title: ', [title], ', type: ', [type], ', image: ', [image])
+
+    const { startDownloadTask } = await startImageTask(pool, log, image)
+
+    await Db.queryRaw(pool,
+      'update', t,
+      'set', Db.list([
+        Db.set(t.status, Db.param('done' as const)),
+        Db.set(t.title, Db.param(title)),
+        Db.set(t.type, Db.param(type)),
+        Db.set(t.image, Db.param(image)),
+      ]),
+      'where', Db.eq(t.url, Db.param(url)),
+    )
+
+    log.I('Done downloading link')
+
+    await startDownloadTask()
+  }
+  catch(error) {
+    log.E('Failed to download link: ', [error])
+
+    await Db.queryRaw(pool,
+      'update', t,
+      'set', Db.list([
+        Db.set(t.status, Db.param('error' as const)),
+      ]),
+      'where', Db.eq(t.url, Db.param(url)),
+    )
+  }
+}
+
+export async function startImageTask(
+  pool: Db.DbPool,
+  baseLog: L.Log,
+  imageUrl: string | null
+) {
+  if(imageUrl === null) {
+    return { startDownloadTask: async() => {} }
+  }
+
+  const key = U.getHash('url', imageUrl)
+  const log = baseLog.addedCtx('image ', [key])
+
+  const shouldDownload = await Db.timedTran(pool, async(db) => {
+    const t = Db.t.images
+    const schema = Db.d.images
+
+    const existing = await Db.query(db,
+      'select', [t.key],
+      'from', t,
+      'where', Db.eq(t.key, Db.param(key)),
+    ).then(it => it.at(0))
+
+    if(existing) {
+      log.I(' Already exists')
+      return false
+    }
+
+    await Db.insertMany(db, t, schema, [{
+      key,
+      status: 'downloading',
+      bytes: Buffer.from([]),
+      downloadStartDate: T.Now.instant().toJSON(),
+    }], {})
+
+    return true
+  })
+
+  return {
+    startDownloadTask: async() => {
+      if(shouldDownload) {
+        try {
+          await downloadImage(pool, log, imageUrl, key)
+        }
+        catch(err) {
+          log.E('While downloading image: ', [err])
+        }
+      }
+    }
+  }
+}
+
+export async function downloadImage(
+  pool: Db.DbPool,
+  log: L.Log,
+  imageUrl: string,
+  key: string
+) {
+  log.I('Downloading image from URL')
+
+  const t = Db.t.images
+
+  try {
+    log.I('Fetching image')
+
+    const response = await fetch(imageUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; TelegramBot/1.0)',
+      },
+    })
+
+    if (!response.ok) {
+      log.E('Response status: ', [response.status])
+      throw new Error()
+    }
+
+    log.I('Getting image data')
+    const buffer = await streamConsumers.buffer(response.body!)
+
+    log.I('Done downloading image')
+
+    await Db.queryRaw(pool,
+      'update', t,
+      'set', Db.list([
+        Db.set(t.status, Db.param('done' as const)),
+        Db.set(t.bytes, Db.param(buffer)),
+      ]),
+      'where', Db.eq(t.key, Db.param(key)),
+    )
+  }
+  catch(error) {
+    log.E('Failed to download image: ', [error])
+
+    await Db.queryRaw(pool,
+      'update', t,
+      'set', Db.list([
+        Db.set(t.status, Db.param('error' as const)),
+      ]),
+      'where', Db.eq(t.key, Db.param(key)),
     )
   }
 }
@@ -344,18 +578,38 @@ export async function reply(
       break
     }
 
-    const t = Db.t.photos
+    const thresholdP = Db.param(now.subtract({ seconds: 20 }).toJSON())
+
+    const { photos, images, linkInfo } = Db.t
     const totalLoading = await Db.query(pool,
       'select', [
-        Db.named(
-          'totalLoading',
-          Db.func<typeof Db.dbTypes.bigint>('count', '*')
-        ),
+        Db.named('totalLoading', Db.func<typeof Db.dbTypes.bigint>('count', '*')),
       ],
-      'from', t,
-      'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
-      'and', t.downloadStartDate, '>', Db.param(now.subtract({ seconds: 20 }).toJSON()),
-      'and', Db.eq(t.status, Db.param('downloading' as const)),
+      'from', Db.par(
+        'select 1',
+        'from', photos,
+        'where', Db.eq(photos.chatId, Db.param(BigInt(chatId))),
+        'and', photos.downloadStartDate, '>', thresholdP,
+        'and', Db.eq(photos.status, Db.param('downloading' as const)),
+
+        'union all',
+
+        'select 1',
+        'from', linkInfo,
+        // NOTE: not filtering by chats. Fine since thre aren't many chats
+        // this is running in.
+        'where', linkInfo.downloadStartDate, '>', thresholdP,
+        'and', Db.eq(linkInfo.status, Db.param('downloading' as const)),
+
+        'union all',
+
+        'select 1',
+        'from', images,
+        // NOTE: not filtering by chats. Fine since thre aren't many chats
+        // this is running in.
+        'where', images.downloadStartDate, '>', thresholdP,
+        'and', Db.eq(images.status, Db.param('downloading' as const)),
+      ),
     ).then(it => it.at(0)?.totalLoading ?? 0n)
 
     if(totalLoading === 0n) {
@@ -806,13 +1060,22 @@ type MessageWithAttachments = {
   video: Video | undefined
   videoNote: VideoNote | undefined
   generation: OpenRouterMessage[]
+  linkInfos: {
+    url: string
+    title: string
+    type: string
+    image: {
+      data: Buffer
+      status: 'done' | 'downloading' | 'error' | 'not-available'
+    } | undefined
+  }[]
 }
 
 export async function fetchMessages(
   conn: Db.DbConnOrPool,
   log: L.Log,
   chatId: number,
-  ctx?: { lastMessage?: number, skipImages?: boolean }
+  ctx?: { lastMessage?: number, skipImages?: boolean, skipLinks?: boolean }
 ): Promise<MessageWithAttachments[]> {
   const t = Db.t.messages
   const messagesRaw = await Db.query(conn,
@@ -905,6 +1168,7 @@ export async function fetchMessages(
           })(),
         }
       })(),
+      linkInfos: [],
     }
   })
 
@@ -960,6 +1224,61 @@ export async function fetchMessages(
           photo.data = photoRow.bytes
         }
       }
+    }
+  }
+
+  if(ctx?.skipLinks !== true) {
+    const urls = new Set<string>()
+    for(const { msg } of messages) {
+      const url = msg.link_preview_options?.url
+      if(url) urls.add(url)
+    }
+
+    const { images, linkInfo } = Db.t
+    const linkInfosList = await Db.query(conn,
+      'select', [linkInfo.url, linkInfo.title, linkInfo.type, linkInfo.image],
+      'from', linkInfo,
+      'where', Db.inArr(linkInfo.url, [...urls]),
+    )
+    const linkInfosMap = new Map(linkInfosList.map(it => [it.url, it]))
+
+    const imageKeys = new Set<string>()
+    for(const linkInfo of linkInfosMap.values()) {
+      if(linkInfo.image === null) continue
+      imageKeys.add(U.getHash('url', linkInfo.image))
+    }
+    const imagesList = await Db.query(conn,
+      'select', [images.key, images.bytes, images.status],
+      'from', images,
+      'where', Db.inArr(images.key, [...imageKeys]),
+    )
+    const imagesMap = new Map(imagesList.map(it => [it.key, it]))
+
+    for(const message of messages) {
+      const url = message.msg.link_preview_options?.url
+      if(!url) continue
+
+      const linkInfo = linkInfosMap.get(url ?? '')
+      if(linkInfo === undefined) continue
+
+      message.linkInfos.push({
+        url: linkInfo.url,
+        title: linkInfo.title ?? 'N/A',
+        type: linkInfo.type ?? 'N/A',
+        image: (() => {
+          const url = linkInfo.image
+          if(url === null) return undefined
+          const image = imagesMap.get(U.getHash('url', linkInfo.image))
+          if(image === undefined) {
+            return { data: Buffer.from([]), status: 'not-available' }
+          }
+
+          return {
+            data: Buffer.from(image.bytes),
+            status: image.status,
+          }
+        })()
+      })
     }
   }
 
@@ -1025,7 +1344,7 @@ export async function messagesToModelInput(
 */
 
   for(const message of messages) {
-    const { msg, photos, video, videoNote, reactions } = message
+    const { msg, photos, video, videoNote, reactions, linkInfos } = message
     if(msg.new_chat_title !== undefined) {
       openrouterMessages.push({
         role: 'user',
@@ -1165,6 +1484,20 @@ export async function messagesToModelInput(
         text: `<sticker ${msg.sticker.emoji ?? 'not available'}>`,
       })
     }
+    for(const linkInfo of linkInfos) {
+      content.push({
+        type: 'text' as const,
+        text: `<url ${linkInfo.url}: "${linkInfo.title}">`
+      })
+      if(linkInfo.image) {
+        content.push(await photoToMessagePart(
+          log,
+          linkInfo.image,
+          '<thumbnail not available>',
+          photoQuota
+        ))
+      }
+    }
 
     openrouterMessages.push({ role: 'user', content })
     for(const msg of message.generation) {
@@ -1207,7 +1540,7 @@ export async function messagesToModelInput(
 
 async function photoToMessagePart(
   log: L.Log,
-  photo: Photo,
+  photo: { data: Buffer, status: string },
   fallback: string,
   quota: { remainingCount: number, remainingSize: number }
 ) {
@@ -1226,7 +1559,7 @@ async function photoToMessagePart(
       }
     }
     else {
-      log.W('Could not detect file type for', photo.file_unique_id)
+      log.W('Could not detect file type for image')
     }
   }
 

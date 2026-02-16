@@ -118,3 +118,22 @@ model backup {
     date DateTime @db.Timestamp(6) @default(now())
     raw Json
 }
+
+model linkInfo {
+    url String @id
+
+    title String?
+    type String?
+    image String?
+
+    status downloadStatus
+    downloadStartDate DateTime @db.Timestamp(6)
+}
+
+model images {
+    key String @id
+
+    status downloadStatus
+    bytes Bytes
+    downloadStartDate DateTime @db.Timestamp(6)
+}
