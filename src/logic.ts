@@ -666,7 +666,7 @@ export async function reply(
     log.I('Sending conversation')
 
 
-    console.log(util.inspect(openrouterMessages, { maxArrayLength: Infinity, maxStringLength: Infinity, depth: Infinity }))
+    log.I('Messages: ', util.inspect(openrouterMessages, { maxArrayLength: Infinity, maxStringLength: 4000, depth: Infinity }))
 
     let response: OpenRouterResponse
     try {
