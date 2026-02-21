@@ -1172,6 +1172,18 @@ export async function fetchMessages(
     }
   })
 
+  type PhotoSubset = { status: 'done' | 'downloading' | 'error' | 'not-available', data: Buffer }
+  const photosByMessage = new Map<number, PhotoSubset[]>()
+  const addPhoto = (message: MessageWithAttachments, photo: PhotoSubset) => {
+    const key = message.msg.message_id
+    let arr = photosByMessage.get(key)
+    if(arr === undefined) {
+      arr = []
+      photosByMessage.set(key, arr)
+    }
+    arr.push(photo)
+  }
+
   if(ctx?.skipImages !== true) {
     // Insertion order is from latest to earliest.
     const fileUniqueIds = new Set<string>()
@@ -1205,6 +1217,7 @@ export async function fetchMessages(
         if(photoRow !== undefined) {
           photo.status = photoRow.status
           photo.data = photoRow.bytes
+          addPhoto(message, photo)
         }
       }
       if(message.video?.thumbnail) {
@@ -1213,6 +1226,7 @@ export async function fetchMessages(
         if(photoRow !== undefined) {
           photo.status = photoRow.status
           photo.data = photoRow.bytes
+          addPhoto(message, photo)
         }
       }
       if(message.videoNote?.thumbnail) {
@@ -1222,6 +1236,7 @@ export async function fetchMessages(
         if(photoRow !== undefined) {
           photo.status = photoRow.status
           photo.data = photoRow.bytes
+          addPhoto(message, photo)
         }
       }
     }
@@ -1261,24 +1276,49 @@ export async function fetchMessages(
       const linkInfo = linkInfosMap.get(url ?? '')
       if(linkInfo === undefined) continue
 
+      const photo = ((): PhotoSubset | undefined => {
+        const url = linkInfo.image
+        if(url === null) return undefined
+        const image = imagesMap.get(U.getHash('url', linkInfo.image))
+        if(image === undefined) {
+          return { data: Buffer.from([]), status: 'not-available' }
+        }
+
+        return {
+          data: Buffer.from(image.bytes),
+          status: image.status,
+        }
+      })()
+      if(photo) addPhoto(message, photo)
+
       message.linkInfos.push({
         url: linkInfo.url,
         title: linkInfo.title ?? 'N/A',
         type: linkInfo.type ?? 'N/A',
-        image: (() => {
-          const url = linkInfo.image
-          if(url === null) return undefined
-          const image = imagesMap.get(U.getHash('url', linkInfo.image))
-          if(image === undefined) {
-            return { data: Buffer.from([]), status: 'not-available' }
-          }
-
-          return {
-            data: Buffer.from(image.bytes),
-            status: image.status,
-          }
-        })()
+        image: photo,
       })
+    }
+  }
+
+{
+    const photosList = [...photosByMessage].sort((a, b) => -(a[0] - b[0]))
+    const photoQuota = { remainingCount: 5, remainingSize: 5_000_000 }
+    for(const [_, photos] of photosList) {
+      for(const photo of photos) {
+        if(photo.status === 'done') {
+          if(
+            photoQuota.remainingCount > 0
+              && photoQuota.remainingSize >= photo.data.length
+          ) {
+            photoQuota.remainingCount--
+            photoQuota.remainingSize -= photo.data.length
+          }
+          else {
+            photo.status = 'not-available'
+            photo.data = Buffer.from([])
+          }
+        }
+      }
     }
   }
 
@@ -1318,7 +1358,6 @@ export async function messagesToModelInput(
   }
 ): Promise<OpenRouterMessage[]> {
   const openrouterMessages: OpenRouterMessage[] = []
-  const photoQuota = { remainingCount: 5, remainingSize: 5_000_000 }
 
   if(chatInfo) {
     openrouterMessages.push({
@@ -1410,7 +1449,7 @@ export async function messagesToModelInput(
     content.push({ type: 'text', text })
 
     for(const photo of photos) {
-      content.push(await photoToMessagePart(log, photo, '<image not available>', photoQuota))
+      content.push(await photoToMessagePart(log, photo, '<image not available>'))
     }
     if(video) {
       content.push({
@@ -1426,7 +1465,6 @@ export async function messagesToModelInput(
           log,
           video.thumbnail,
           '<thumbnail not available>',
-          photoQuota
         ))
       }
     }
@@ -1440,7 +1478,6 @@ export async function messagesToModelInput(
           log,
           videoNote.thumbnail,
           '<thumbnail not available>',
-          photoQuota
         ))
       }
     }
@@ -1494,7 +1531,6 @@ export async function messagesToModelInput(
           log,
           linkInfo.image,
           '<thumbnail not available>',
-          photoQuota
         ))
       }
     }
@@ -1542,13 +1578,10 @@ async function photoToMessagePart(
   log: L.Log,
   photo: { data: Buffer, status: string },
   fallback: string,
-  quota: { remainingCount: number, remainingSize: number }
 ) {
-  if(photo.status === 'done' && quota.remainingCount > 0 && quota.remainingSize >= photo.data.length) {
+  if(photo.status === 'done') {
     const type = await new FileTypeParser().fromBuffer(photo.data)
     if(type !== undefined) {
-      quota.remainingCount--
-      quota.remainingSize -= photo.data.length
       const dataUrl = `data:${type.mime};base64,${photo.data.toString("base64")}`;
       return {
         type: 'image_url' as const,
