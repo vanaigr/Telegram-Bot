@@ -972,8 +972,13 @@ export async function sendPrompt(
   systemPrompt: string,
 ) {
   return await openRouter.chat.send({
-    //model: 'google/gemini-3-flash-preview', // good, but we need better. 1. Confuses people a lot. 2. Think's it someone else. 3. Eventually explodes (longer and longer messages)
-    model: 'moonshotai/kimi-k2.5',
+    // good, but we need better. 1. Confuses people a lot. 2. Think's it someone else. 3. Eventually explodes (longer and longer messages)
+    // try again. Maybe seeing its own reasoning helps it not explode.
+    model: 'google/gemini-3-flash-preview',
+
+    // quite dumb
+    //model: 'moonshotai/kimi-k2.5',
+
     maxCompletionTokens: 6000,
     provider: {
       dataCollection: 'deny',
