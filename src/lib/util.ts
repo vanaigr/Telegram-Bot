@@ -75,3 +75,18 @@ export function getHash(...fields: unknown[]) {
   }
   return result;
 }
+
+export function sleepUntil(until: T.Instant) {
+  return new Promise((s) => {
+    const check = () => {
+      const diff = until.since(T.Now.instant());
+      if (diff.sign <= 0) {
+        s(undefined);
+        return;
+      }
+      setTimeout(check, diff.total('milliseconds'));
+    };
+    check();
+  });
+}
+

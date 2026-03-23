@@ -6,34 +6,10 @@ import * as L from './lib/log.ts'
 import * as U from './lib/util.ts'
 import type * as Types from './types.ts'
 import * as Logic from './logic.ts'
+import * as T from './lib/temporal.ts'
 
 export async function POST(req: Request): Promise<Response> {
-  const axiomLogger = (() => {
-    const token = process.env.AXIOM_TOKEN
-    const dataset = process.env.AXIOM_DATASET
-    const reqId = req.headers.get('x-vercel-id') ?? '';
-
-    if(!token || !dataset) return
-
-    const savedLogs: { reqId: string, channel: string, _time: string, text: string }[] = []
-
-    return {
-      logger: (channel: string, timestamp: string, text: string) => {
-        savedLogs.push({ reqId, channel, _time: timestamp, text })
-      },
-      flush: async() => {
-        const result = await fetch('https://us-east-1.aws.edge.axiom.co/v1/ingest/' + encodeURIComponent(dataset), {
-          method: 'POST',
-          headers: {
-            authorization: 'Bearer ' + token,
-            'content-type': 'application/json',
-          },
-          body: JSON.stringify(savedLogs),
-        }).then(it => it.json())
-        console.log(result)
-      }
-    }
-  })()
+  const axiomLogger = makeLogger(req.headers.get('x-vercel-id') ?? '');
 
   const log = L.makeLogger(undefined, axiomLogger)
   if(axiomLogger === undefined) log.W('Not using axiom')
@@ -64,8 +40,60 @@ export async function POST(req: Request): Promise<Response> {
       return new Response('')
     }
   }
-  finally {
-    await log.flushMessages()
+  catch(err) {
+    log.E('Request failed ', [err])
+      return new Response('', { status: 500 })
+  }
+}
+
+function makeLogger(reqId: string) {
+  const token = process.env.AXIOM_TOKEN
+  const dataset = process.env.AXIOM_DATASET
+
+  if(!token || !dataset) return
+
+  const savedLogs: { reqId: string, channel: string, _time: string, text: string }[] = []
+
+  let lastFlush: Promise<unknown> = Promise.resolve()
+  let pendingFlush: Promise<unknown> | undefined
+
+  return {
+    logger: (channel: string, timestamp: string, text: string) => {
+      savedLogs.push({ reqId, channel, _time: timestamp, text })
+
+      if(pendingFlush === undefined) {
+        const flushRun = (async() => {
+          await Promise.all([
+            U.sleepUntil(T.Now.instant().add({ seconds: 5 })),
+            lastFlush,
+          ])
+          lastFlush = flushRun!
+          pendingFlush = undefined
+
+          const curSavedLogs = savedLogs.slice()
+          savedLogs.length = 0
+
+          try {
+            const result = await fetch('https://us-east-1.aws.edge.axiom.co/v1/ingest/' + encodeURIComponent(dataset), {
+              method: 'POST',
+              headers: {
+                authorization: 'Bearer ' + token,
+                'content-type': 'application/json',
+              },
+              body: JSON.stringify(curSavedLogs),
+            }).then(it => it.json())
+
+            console.log(result)
+          }
+          catch(err) {
+            console.error(err)
+          }
+        })();
+        pendingFlush = flushRun
+        waitUntil(flushRun)
+      }
+    },
+    flush: async() => {},
   }
 }
 
