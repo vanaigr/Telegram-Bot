@@ -626,6 +626,8 @@ export async function reply(
   const respondsToMessage = messages.at(-1)!
   const respondsToMessageId = respondsToMessage.msg.message_id
 
+  log.I('Will be responding to ', [respondsToMessageId])
+
   const openrouterMessages: OpenRouterMessage[] = await messagesToModelInput({
     messages,
     chatInfo: await chatInfoP,
@@ -679,7 +681,7 @@ export async function reply(
       completion.sent = true
       break
     }
-    log.I('Responded')
+    log.I('Received generation: ', [response, 'details'])
 
     await Db.insertMany(
       pool,
@@ -931,6 +933,23 @@ export async function reply(
     log.E('Non-continue finishReason: ', [finishReason], '. Stopping')
     break
   }
+
+  log.I(
+    'Updating generation in db: ',
+    [ chatId ],
+    ', ',
+    [ respondsToMessage.msg.message_id ],
+    ' - ',
+    [[...respondsToMessage.generation, ...thisMessageGeneration], 'details'],
+  )
+  const actualMessage = await Db.query(pool,
+    'select', [Db.t.messages.generation],
+    'from', Db.t.messages,
+    'where', Db.eq(Db.t.messages.chatId, Db.param(BigInt(chatId))),
+    'and', Db.eq(Db.t.messages.messageId, Db.param(BigInt(respondsToMessage.msg.message_id))),
+    'limit 1',
+  ).then(it => it.at(0))
+  log.I('Actual message generation: ', [actualMessage, 'details'])
 
   await Db.queryRaw(pool,
     'update', Db.t.messages, 'set', Db.list([
