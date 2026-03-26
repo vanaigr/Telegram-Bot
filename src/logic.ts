@@ -562,8 +562,6 @@ export async function reply(
   log.I('Answering message ', [firstLatest.messageId])
   // Now we know that there is something to reply to.
 
-  const cancelTypingStatus = startTypingTask(chatId, log)
-
   const openRouter = new OpenRouter({ apiKey: process.env.OPENROUTER_KEY! });
 
   // Postpone responding for 10 seconds if some attachments are loading.
@@ -652,6 +650,8 @@ export async function reply(
   })
 
   let thisMessageGeneration: OpenRouterMessage[] = []
+
+  const cancelTypingStatus = startTypingTask(chatId, log)
 
   const promises: Promise<unknown>[] = []
 
