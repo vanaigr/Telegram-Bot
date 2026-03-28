@@ -148,42 +148,44 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
   const whitelistInfo = await getChatWhitelistInfo(pool, log, message.chat.id)
   if(whitelistInfo === undefined) return new Response()
 
-  // NOTE: also for edits. Is that good?
-  if(message.text?.startsWith('/start')) {
-    log.I('Received start command')
+  if(!edit) {
+    // NOTE: also for edits. Is that good?
+    if(message.text?.startsWith('/start')) {
+      log.I('Received start command')
 
-    const t = Db.t.chatWhitelist
-    await Db.queryRaw(pool,
-      'update', t,
-      'set', Db.set(t.enabled, Db.param(true)),
-      'where', Db.eq(t.id, Db.param(BigInt(message.chat.id))),
-    )
+      const t = Db.t.chatWhitelist
+      await Db.queryRaw(pool,
+        'update', t,
+        'set', Db.set(t.enabled, Db.param(true)),
+        'where', Db.eq(t.id, Db.param(BigInt(message.chat.id))),
+      )
 
-    const emojis = ['👍', '😇', '😍', '😜', '😭', '🤞', '🤡', '🤢', '🤰']
-    const text = 'Бот воскрешен '
-      + emojis[Math.floor(Math.random() * emojis.length)]
-      + '. /stop чтобы выключить'
+      const emojis = ['👍', '😇', '😍', '😜', '😭', '🤞', '🤡', '🤢', '🤰']
+      const text = 'Бот воскрешен '
+        + emojis[Math.floor(Math.random() * emojis.length)]
+        + '. /stop чтобы выключить'
 
-    await Logic.sendMessage(message.chat.id, { text, entities: [] }, log)
-    return new Response()
-  }
-  else if(message.text?.startsWith('/stop')) {
-    log.I('Received stop command')
+      await Logic.sendMessage(message.chat.id, { text, entities: [] }, log)
+      return new Response()
+    }
+    else if(message.text?.startsWith('/stop')) {
+      log.I('Received stop command')
 
-    const t = Db.t.chatWhitelist
-    await Db.queryRaw(pool,
-      'update', t,
-      'set', Db.set(t.enabled, Db.param(false)),
-      'where', Db.eq(t.id, Db.param(BigInt(message.chat.id))),
-    )
+      const t = Db.t.chatWhitelist
+      await Db.queryRaw(pool,
+        'update', t,
+        'set', Db.set(t.enabled, Db.param(false)),
+        'where', Db.eq(t.id, Db.param(BigInt(message.chat.id))),
+      )
 
-    const emojis = ['👍', '😌', '😇', '😈', '🗿', '😓', '🙂', '☠', '💀', '⚰️']
-    const text = 'Бот убит '
-      + emojis[Math.floor(Math.random() * emojis.length)]
-      + '. /start чтобы включить'
+      const emojis = ['👍', '😌', '😇', '😈', '🗿', '😓', '🙂', '☠', '💀', '⚰️']
+      const text = 'Бот убит '
+        + emojis[Math.floor(Math.random() * emojis.length)]
+        + '. /start чтобы включить'
 
-    await Logic.sendMessage(message.chat.id, { text, entities: [] }, log)
-    return new Response()
+      await Logic.sendMessage(message.chat.id, { text, entities: [] }, log)
+      return new Response()
+    }
   }
 
   await Db.timedTran(pool, async(db) => {
