@@ -98,7 +98,7 @@ function makeLogger(reqId: string) {
 }
 
 async function handleReaction(log: L.Log, reaction: Types.MessageReactionUpdated) {
-  log.I('Reaction ', [reaction.chat.id], 'on message ', [reaction.message_id], ' in ', [reaction.chat.id])
+  log.I('Reaction ', [reaction.chat.id], ' on message ', [reaction.message_id], ' in ', [reaction.chat.id])
 
   const pool = DbClient.create(log)
   if(!pool) {
@@ -137,7 +137,7 @@ async function handleReaction(log: L.Log, reaction: Types.MessageReactionUpdated
 }
 
 async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) {
-  log.I('Message ', [message.message_id], ' in chat ', [message.chat.id])
+  log.I('Message ', [message.message_id], ' in chat ', [message.chat.id], '. Edited: ', [edit])
 
   const pool = DbClient.create(log)
   if(!pool) {
