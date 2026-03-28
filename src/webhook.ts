@@ -191,6 +191,7 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
     const schema = Db.d.messages
     const src = Db.makeTable<typeof schema>('src')
     const cols = Db.keys(schema)
+    const updateCols = Db.keys(Db.omit(schema, ['chatId', 'messageId', 'type', 'generation']))
 
     const record: Db.ForInput<typeof schema> = {
       chatId: message.chat.id,
@@ -221,7 +222,7 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
       'select', Db.list(cols.map(it => src[it])),
       'from', Db.arraysTable([record], schema), 'as', src,
       'on conflict', Db.args([dst.chatId.nameOnly, dst.messageId.nameOnly]),
-      'do update set', Db.list(cols.map(it => [dst[it].nameOnly, '=', excluded[it]])),
+      'do update set', Db.list(updateCols.map(it => [dst[it].nameOnly, '=', excluded[it]])),
     )
   })
   log.I('Added message')
