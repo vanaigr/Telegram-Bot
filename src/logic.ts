@@ -648,7 +648,7 @@ export async function reply(
   */
   openrouterMessages.push({
     role: 'system',
-    content: 'Reminder: consider whether you should respond. Do not repeat yourself or others.'
+    content: 'Reminder: Do not repeat yourself or others. Pay attention to user names.'
   })
 
   let thisMessageGeneration: OpenRouterMessage[] = []
