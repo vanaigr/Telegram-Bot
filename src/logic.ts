@@ -648,7 +648,7 @@ export async function reply(
   */
   openrouterMessages.push({
     role: 'system',
-    content: 'Reminder: Do not repeat yourself or others. Pay attention to user names.'
+    content: 'Reminder: Do not reply to every message. Do not repeat yourself or others. Pay attention to user names. Do not reply to every message.'
   })
 
   let thisMessageGeneration: OpenRouterMessage[] = []
@@ -984,8 +984,7 @@ Think about if you should reply to the messages or not.
 - If you decided not to respond, output <NO_OUTPUT>.
 - You can use 'message_reaction' tool to add a reaction to a message.
 
-**Important**: You shouldn't reply to every message.
-**Important**: Think in English.
+**Important**: Do not reply to every message.
 `.trim() + '\n'
 
 export async function sendPrompt(
@@ -1782,7 +1781,7 @@ export function userToString(user: Types.User | undefined, full: boolean) {
       || user.username === undefined // telegram channel repost
       || user.username === 'GroupAnonymousBot' // channel admin
   ) {
-    return 'God User'
+    return '@god_user'
   }
   if(full) {
     const fullName = user.first_name + ' ' + (user.last_name ?? '')
