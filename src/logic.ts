@@ -757,7 +757,7 @@ export async function reply(
               messages: [
                 {
                   role: 'system',
-                  content: 'You need to perform a search and repeat the search results as-is. Search queries are given below',
+                  content: 'You need to perform a search and repeat the search results as-is. Search queries are given below. If it is a link, read the link and repeat the result as-is.',
                 },
                 {
                   role: 'user',
@@ -1027,7 +1027,7 @@ export async function sendPrompt(
         type: 'function',
         function: {
           name: 'search',
-          description: 'Perform Search. **Important**: Will fail without express user consent.',
+          description: 'Perform Search/read a URL. **Important**: Will fail without express user consent.',
           parameters: {
             type: "object",
             properties: {
