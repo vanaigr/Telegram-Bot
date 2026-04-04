@@ -831,7 +831,7 @@ export async function reply(
       let content = response.choices[0].message.content
       if(typeof content === 'string') {
         // replace multiple emoji with utter emptiness
-        content = content.replaceAll(/(\p{Extended_Pictographic}\uFE0F?){2,}/gu, '')
+        content = content.replaceAll(/(\p{Extended_Pictographic}(\uFE0F?| *)){2,} */gu, '')
         response.choices[0].message.content = content
         return content
       }
