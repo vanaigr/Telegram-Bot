@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@openrouter/sdk':
-        specifier: ^0.3.14
-        version: 0.3.14
+        specifier: ^0.11.2
+        version: 0.11.2
       '@vercel/functions':
         specifier: ^3.3.6
         version: 3.3.6
@@ -329,8 +329,8 @@ packages:
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
 
-  '@openrouter/sdk@0.3.14':
-    resolution: {integrity: sha512-+smUr3ZmMLXO/vLjXKvQzED44vd+45U4GoSTOOnNcln5lLv4JslPtCRBIYXEVx+adiBsiRkFaq5BAPsZhKIEDA==}
+  '@openrouter/sdk@0.11.2':
+    resolution: {integrity: sha512-uu8zu7vd4hA2l4vUD1UiZuefxqaH2/ixFcUG8GIO9+qcEJkWX4AYAil7SpGmZOTgy8STLFTEk4M4MmyUW0YMLg==}
 
   '@oxc-project/types@0.110.0':
     resolution: {integrity: sha512-6Ct21OIlrEnFEJk5LT4e63pk3btsI6/TusD/GStLi7wYlGJNOl1GI9qvXAnRAxQU9zqA2Oz+UwhfTOU2rPZVow==}
@@ -2449,7 +2449,7 @@ snapshots:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.1
 
-  '@openrouter/sdk@0.3.14':
+  '@openrouter/sdk@0.11.2':
     dependencies:
       zod: 4.3.5
 

@@ -784,24 +784,26 @@ export async function reply(
             l.I('Searching')
 
             const searchResult = await openRouter.chat.send({
-              model: 'openai/gpt-5-nano',
-              plugins: [
-                {
-                  id: "web",
-                  maxResults: 3,
-                  searchPrompt: '',
-                },
-              ],
-              messages: [
-                {
-                  role: 'system',
-                  content: 'You need to perform a search and repeat the search results as-is. Search queries are given below. If it is a link, read the link and repeat the result as-is.',
-                },
-                {
-                  role: 'user',
-                  content: tool.function.arguments,
-                },
-              ],
+              chatRequest: {
+                model: 'openai/gpt-5-nano',
+                plugins: [
+                  {
+                    id: "web",
+                    maxResults: 3,
+                    searchPrompt: '',
+                  },
+                ],
+                messages: [
+                  {
+                    role: 'system',
+                    content: 'You need to perform a search and repeat the search results as-is. Search queries are given below. If it is a link, read the link and repeat the result as-is.',
+                  },
+                  {
+                    role: 'user',
+                    content: tool.function.arguments,
+                  },
+                ],
+              }
             })
             l.I('Done searching')
 
@@ -855,25 +857,27 @@ export async function reply(
             }
 
             const result = await openRouter.chat.send({
-              model: 'google/gemini-2.5-flash-image',
-              modalities: ['image'],
-              imageConfig: {
-                // because who knows
-                aspectRatio: '1:1',
-                aspect_ratio: '1:1',
-                imageSize: '1K',
-                image_size: '1K',
-              },
-              messages: [
-                {
-                  role: 'system',
-                  content: 'Generate an image for the following prompt: ',
+              chatRequest: {
+                model: 'google/gemini-2.5-flash-image',
+                modalities: ['text', 'image'],
+                imageConfig: {
+                  // because who knows
+                  aspectRatio: '1:1',
+                  aspect_ratio: '1:1',
+                  imageSize: '1K',
+                  image_size: '1K',
                 },
-                {
-                  role: 'user',
-                  content: args.prompt,
-                },
-              ],
+                messages: [
+                  {
+                    role: 'system',
+                    content: 'Generate an image for the following prompt: ',
+                  },
+                  {
+                    role: 'user',
+                    content: args.prompt,
+                  },
+                ],
+              }
             })
             l.I('Done generating')
 
@@ -889,9 +893,7 @@ export async function reply(
               {},
             )
 
-            const c0 = result.choices[0].message.content
-            const content = typeof c0 === 'string' ? [c0] : c0 ?? []
-            const image = content.find(it => typeof it !== 'string' && it.type === 'image_url')
+            const image = result.choices[0].message.images?.[0]
             if(image === undefined) {
               return {
                 role: 'tool' as const,
@@ -1069,87 +1071,89 @@ export async function sendPrompt(
   systemPrompt: string,
 ) {
   return await openRouter.chat.send({
-    // good, but we need better. 1. Confuses people a lot. 2. Think's it someone else. 3. Eventually explodes (longer and longer messages)
-    // try again. Maybe seeing its own reasoning helps it not explode.
-    model: 'google/gemini-3-flash-preview',
+    chatRequest: {
+      // good, but we need better. 1. Confuses people a lot. 2. Think's it someone else. 3. Eventually explodes (longer and longer messages)
+      // try again. Maybe seeing its own reasoning helps it not explode.
+      model: 'google/gemini-3-flash-preview',
 
-    // quite dumb
-    //model: 'moonshotai/kimi-k2.5',
+      // quite dumb
+      //model: 'moonshotai/kimi-k2.5',
 
-    maxCompletionTokens: 6000,
-    provider: {
-      dataCollection: 'deny',
-    },
-    reasoning: {
-      effort: 'high',
-    },
-    tools: [
-      {
-        type: 'function',
-        function: {
-          name: 'message_reaction',
-          description: 'Adds an emoji reaction to a message',
-          parameters: {
-            type: 'object',
-            properties: {
-              messageId: { type: 'string' },
-              emoji: { type: 'string' },
-            },
-            required: ['emoji', 'messageId'],
-          }
-        },
+      maxCompletionTokens: 6000,
+      provider: {
+        dataCollection: 'deny',
       },
-      {
-        type: 'function',
-        function: {
-          name: 'search',
-          description: 'Perform Search/read a URL. **Important**: Will fail without express user consent.',
-          parameters: {
-            type: "object",
-            properties: {
-              queries: {
-                type: "array",
-                items: {
+      reasoning: {
+        effort: 'high',
+      },
+      tools: [
+        {
+          type: 'function',
+          function: {
+            name: 'message_reaction',
+            description: 'Adds an emoji reaction to a message',
+            parameters: {
+              type: 'object',
+              properties: {
+                messageId: { type: 'string' },
+                emoji: { type: 'string' },
+              },
+              required: ['emoji', 'messageId'],
+            }
+          },
+        },
+        {
+          type: 'function',
+          function: {
+            name: 'search',
+            description: 'Perform Search/read a URL. **Important**: Will fail without express user consent.',
+            parameters: {
+              type: "object",
+              properties: {
+                queries: {
+                  type: "array",
+                  items: {
+                    type: "string",
+                  },
+                },
+              },
+              required: ["queries"],
+            },
+          },
+        },
+        {
+          type: 'function',
+          function: {
+            name: 'generate_image_attachment',
+            description: 'Generates and attaches an image to the reply. Only use when asked by a user.',
+            parameters: {
+              type: "object",
+              properties: {
+                prompt: {
                   type: "string",
                 },
               },
+              required: ["prompt"],
             },
-            required: ["queries"],
           },
         },
-      },
-      {
-        type: 'function',
-        function: {
-          name: 'generate_image_attachment',
-          description: 'Generates and attaches an image to the reply. Only use when asked by a user.',
-          parameters: {
-            type: "object",
-            properties: {
-              prompt: {
-                type: "string",
-              },
-            },
-            required: ["prompt"],
-          },
-        },
-      },
-    ],
-    stream: false,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      ...messages,
-    ],
+      ],
+      stream: false,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...messages,
+      ],
+    }
   })
 }
 
 /// ???????????
-export type OpenRouterMessage = OpenRouter['chat']['send'] extends (a: { messages: Array<infer Message> }) => infer U1 ? Message : never
+export type OpenRouterMessage = OpenRouter['chat']['send'] extends (a: { chatRequest: { messages: Array<infer Message> } }) => infer U1 ? Message : never
 // 🤡🤡🤡🤡🤡🤡🤡🤡🤡🤡
 export type OpenRouterResponse = OpenRouter['chat']['send'] extends {
-  (a: { messages: any, stream: false }): infer R
-  (a: { messages: any, stream: true }): infer U1
-  (a: { messages: any, stream: boolean }): infer U2
+  (a: { chatRequest: { messages: any, stream: false } }): infer R
+  (a: { chatRequest: { messages: any, stream: true } }): infer U1
+  (a: { chatRequest: { messages: any, stream: boolean } }): infer U2
 } ? Awaited<R> : never
 
 type Photo = {
