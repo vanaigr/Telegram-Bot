@@ -652,10 +652,48 @@ export async function reply(
   })
 
   let thisMessageGeneration: OpenRouterMessage[] = []
+  let photoToSend: { data: Buffer, mime: string } | undefined
 
   const cancelTypingStatus = startTypingTask(chatId, log)
 
   const promises: Promise<unknown>[] = []
+
+  const sendReply = async(reply: string) => {
+    log.I('Sending response ', photoToSend !== undefined ? 'w/ photo' : 'w/o photo')
+
+    const responseResult = await sendMessageOrPhoto(
+      chatId,
+      { ...mdToEntities(reply, log), photo: photoToSend },
+      log,
+    )
+    photoToSend = undefined
+
+    if(responseResult.status !== 'ok') {
+      return
+    }
+    if(!responseResult.data.ok) {
+      log.E([responseResult.data.description])
+      return
+    }
+    const newMessage = responseResult.data.result
+    completion.sent = true
+
+    log.I('Inserting response')
+    await Db.insertMany(
+      pool,
+      Db.t.messages,
+      Db.d.messages,
+      [{
+        chatId: newMessage.chat.id,
+        messageId: newMessage.message_id,
+        date: fromMessageDate(newMessage.date).toJSON(),
+        type: 'assistant',
+        raw: JSON.stringify(newMessage),
+        generation: JSON.stringify([]),
+      }],
+      {}
+    )
+  }
 
   let lastReply = ''
   for(let iteration = 0;; iteration++) {
@@ -805,6 +843,91 @@ export async function reply(
             }
           }
         }
+        else if(tool.function.name === 'generate_image_attachment') {
+          try {
+            l.I('Generating image')
+            if(photoToSend !== undefined) {
+              return {
+                role: 'tool' as const,
+                toolCallId: tool.id,
+                content: 'Error: an image is already attached',
+              }
+            }
+
+            const result = await openRouter.chat.send({
+              model: 'google/gemini-2.5-flash-image',
+              modalities: ['image'],
+              imageConfig: {
+                // because who knows
+                aspectRatio: '1:1',
+                aspect_ratio: '1:1',
+                imageSize: '1K',
+                image_size: '1K',
+              },
+              messages: [
+                {
+                  role: 'system',
+                  content: 'Generate an image for the following prompt: ',
+                },
+                {
+                  role: 'user',
+                  content: args.prompt,
+                },
+              ],
+            })
+            l.I('Done generating')
+
+            await Db.insertMany(
+              pool,
+              Db.t.responses,
+              Db.omit(Db.d.responses, ['sequenceNumber']),
+              [{
+                respondsToChatId: chatId,
+                respondsToMessageId,
+                raw: JSON.stringify(result),
+              }],
+              {},
+            )
+
+            const c0 = result.choices[0].message.content
+            const content = typeof c0 === 'string' ? [c0] : c0 ?? []
+            const image = content.find(it => typeof it !== 'string' && it.type === 'image_url')
+            if(image === undefined) {
+              return {
+                role: 'tool' as const,
+                toolCallId: tool.id,
+                content: 'Error: could not generate (do not re-generate)',
+              }
+            }
+
+            const match = image.imageUrl.url.match(/^data:(.+?);base64,(.+)$/)
+            if(match === null) {
+              return {
+                role: 'tool' as const,
+                toolCallId: tool.id,
+                content: 'Error: could not generate (do not re-generate)',
+              }
+            }
+
+            const mime = match[1]
+            const data = Buffer.from(match[2], 'base64')
+            photoToSend = { data, mime }
+
+              return {
+                role: 'tool' as const,
+                toolCallId: tool.id,
+                content: 'Image attached',
+              }
+          }
+          catch(error) {
+            l.E('Image gen failed: ', [error])
+            return {
+              role: 'tool' as const,
+              toolCallId: tool.id,
+              content: 'Error: ' + (('' + error).split('\n')[0] ?? 'unknown'),
+            }
+          }
+        }
         else {
           l.W('Unknown tool ', [tool])
           return {
@@ -846,39 +969,7 @@ export async function reply(
         log.W('Model/OpenRouter doing its nonsense output again')
       }
       else {
-        promises.push((async() => {
-          log.I('Sending response')
-          const responseResult = await sendMessage(
-            chatId,
-            mdToEntities(reply, log),
-            log,
-          )
-          if(responseResult.status !== 'ok') {
-            return
-          }
-          if(!responseResult.data.ok) {
-            log.E([responseResult.data.description])
-            return
-          }
-          const newMessage = responseResult.data.result
-          completion.sent = true
-
-          log.I('Inserting response')
-          await Db.insertMany(
-            pool,
-            Db.t.messages,
-            Db.d.messages,
-            [{
-              chatId: newMessage.chat.id,
-              messageId: newMessage.message_id,
-              date: fromMessageDate(newMessage.date).toJSON(),
-              type: 'assistant',
-              raw: JSON.stringify(newMessage),
-              generation: JSON.stringify([]),
-            }],
-            {}
-          )
-        })())
+        promises.push(sendReply(reply))
       }
 
       lastReply = reply
@@ -934,22 +1025,7 @@ export async function reply(
     break
   }
 
-  log.I(
-    'Updating generation in db: ',
-    [ chatId ],
-    ', ',
-    [ respondsToMessage.msg.message_id ],
-    ' - ',
-    [[...respondsToMessage.generation, ...thisMessageGeneration], 'details'],
-  )
-  const actualMessage = await Db.query(pool,
-    'select', [Db.t.messages.generation],
-    'from', Db.t.messages,
-    'where', Db.eq(Db.t.messages.chatId, Db.param(BigInt(chatId))),
-    'and', Db.eq(Db.t.messages.messageId, Db.param(BigInt(respondsToMessage.msg.message_id))),
-    'limit 1',
-  ).then(it => it.at(0))
-  log.I('Actual message generation: ', [actualMessage, 'details'])
+  if(photoToSend !== undefined) promises.push(sendReply(''))
 
   await Db.queryRaw(pool,
     'update', Db.t.messages, 'set', Db.list([
@@ -1041,7 +1117,23 @@ export async function sendPrompt(
             required: ["queries"],
           },
         },
-      }
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'generate_image_attachment',
+          description: 'Generates and attaches an image to the reply. Only use when asked by a user.',
+          parameters: {
+            type: "object",
+            properties: {
+              prompt: {
+                type: "string",
+              },
+            },
+            required: ["prompt"],
+          },
+        },
+      },
     ],
     stream: false,
     messages: [
@@ -1629,6 +1721,20 @@ async function photoToMessagePart(
 
 }
 
+export async function sendMessageOrPhoto(
+  chatId: number,
+  context: { text: string, entities: Types.MessageEntity[], photo: { data: Buffer, mime: string } | undefined },
+  log: L.Log,
+) {
+  if(context.photo === undefined) {
+    return await sendMessage(chatId, context, log)
+  }
+  else {
+    const photo = context.photo // typescript
+    return await sendImage(chatId, { ...context, photo }, log)
+  }
+}
+
 export async function sendMessage(
   chatId: number,
   { text, entities }: { text: string, entities: Types.MessageEntity[] },
@@ -1644,6 +1750,32 @@ export async function sendMessage(
       text,
       entities,
     }),
+  })
+}
+
+export async function sendImage(
+  chatId: number,
+  {
+    text,
+    entities,
+    photo,
+  }: { text: string, entities: Types.MessageEntity[], photo: { data: Buffer, mime: string } },
+  log: L.Log,
+) {
+  const body = new FormData()
+  body.append('chat_id', '' + chatId)
+  body.append('caption', text)
+  body.append('caption_entities', JSON.stringify(entities))
+  body.append('photo', new Blob([new Uint8Array(photo.data)], { type: photo.mime }))
+
+  return await U.request<TelegramWrapper<Types.Message>>({
+    url: new URL(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN!}/sendPhoto`),
+    log: log.addedCtx('sendMessage'),
+    method: 'POST',
+    headers: {
+      //'content-type': 'multipart/form-data', - set automatically
+    },
+    body: body,
   })
 }
 
