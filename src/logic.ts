@@ -906,7 +906,8 @@ export async function reply(
               }
             }
 
-            const match = image.imageUrl.url.match(/^data:(.+?);base64,(.+)$/)
+            const url = image.imageUrl.url
+            const match = url.match(/^data:(.+?);base64,(.+)$/)
             if(match === null) {
               return {
                 role: 'tool' as const,
@@ -919,11 +920,22 @@ export async function reply(
             const data = Buffer.from(match[2], 'base64')
             photoToSend = { data, mime }
 
-              return {
-                role: 'tool' as const,
-                toolCallId: tool.id,
-                content: 'Image attached',
-              }
+            return {
+              role: 'tool' as const,
+              toolCallId: tool.id,
+              content: [
+                {
+                  type: 'text' as const,
+                  text: 'Image attached:',
+                },
+                {
+                  type: 'image_url' as const,
+                  imageUrl: {
+                    url,
+                  },
+                },
+              ],
+            }
           }
           catch(error) {
             l.E('Image gen failed: ', [error])
