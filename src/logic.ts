@@ -1595,8 +1595,8 @@ export async function messagesToModelInput(
         text: '<Video '
           + (video.info.file_name ?? 'no name')
           + ', '
-          + video.info.duration
-          + 'sec not available>\nThumbnail: '
+          + formatDurationSec(video.info.duration)
+          + ' not available>\nThumbnail: '
       })
       if(video.thumbnail) {
         content.push(await photoToMessagePart(
@@ -1609,7 +1609,7 @@ export async function messagesToModelInput(
     if(videoNote) {
       content.push({
         type: 'text',
-        text: `<Circular video, ${videoNote.info.duration}sec>\nThumbnail: `
+        text: `<Circular video, ${formatDurationSec(videoNote.info.duration)}>\nThumbnail: `
       })
       if(videoNote.thumbnail) {
         content.push(await photoToMessagePart(
@@ -1622,7 +1622,7 @@ export async function messagesToModelInput(
     if(msg.voice) {
       content.push({
         type: 'text' as const,
-        text: `<voice, ${msg.voice.duration}sec not available>`,
+        text: `<voice, ${formatDurationSec(msg.voice.duration)} not available>`,
       })
     }
     if(msg.audio) {
@@ -1633,8 +1633,8 @@ export async function messagesToModelInput(
           + ' by '
           + (msg.audio.performer ?? 'unknown')
           + ', '
-          + msg.audio.duration
-          + 'sec not available>',
+          + formatDurationSec(msg.audio.duration)
+          + ' not available>',
       })
     }
     if(msg.document) {
@@ -2587,4 +2587,11 @@ function notStupidEnd(str: string, op: (it: string) => number) {
   const end = op(str)
   if(end === -1) return str.length
   return end
+}
+
+function formatDurationSec(value: number): string {
+  const sign = value < 0 ? '-' : ''
+  return sign + Math.floor(value /  60 / 60)
+    + ':' + (Math.floor(value / 60) % 60).toString().padStart(2, '0')
+    + ':' + (Math.floor(value) % 60).toString().padStart(2, '0')
 }
