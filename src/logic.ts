@@ -706,7 +706,7 @@ export async function reply(
     log.I('Sending conversation')
 
 
-    log.I('Messages: ', util.inspect(openrouterMessages, { maxArrayLength: Infinity, maxStringLength: 4000, depth: Infinity }))
+    //log.I('Messages: ', util.inspect(openrouterMessages, { maxArrayLength: Infinity, maxStringLength: 4000, depth: Infinity }))
 
     let response: OpenRouterResponse
     try {
@@ -737,7 +737,9 @@ export async function reply(
 
     const reactionsToSend: { emoji: string, messageId: number, shortExplanation: string }[] = []
 
-    const finishReason = response.choices[0].finishReason
+    let finishReason = response.choices[0].finishReason
+    if(finishReason === 'stop' && (response.choices[0].message.toolCalls?.length ?? 0) > 0) finishReason = 'tool_calls'
+
     if(finishReason === 'tool_calls') {
       const results = await Promise.all(response.choices[0].message.toolCalls!.map(async(tool, i) => {
         const args = JSON.parse(tool.function.arguments)
@@ -879,7 +881,7 @@ export async function reply(
                 ],
               }
             })
-            l.I('Done generating')
+            l.I('Done generating image')
 
             await Db.insertMany(
               pool,
