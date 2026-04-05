@@ -659,14 +659,16 @@ export async function reply(
   const promises: Promise<unknown>[] = []
 
   const sendReply = async(reply: string) => {
-    log.I('Sending response ', photoToSend !== undefined ? 'w/ photo' : 'w/o photo')
+    const photo = photoToSend
+    photoToSend = undefined
+
+    log.I('Sending response ', photo !== undefined ? 'w/ photo' : 'w/o photo')
 
     const responseResult = await sendMessageOrPhoto(
       chatId,
-      { ...mdToEntities(reply, log), photo: photoToSend },
+      { ...mdToEntities(reply, log), photo },
       log,
     )
-    photoToSend = undefined
 
     if(responseResult.status !== 'ok') {
       return
@@ -1151,7 +1153,7 @@ export async function sendPrompt(
 
 /// ???????????
 export type OpenRouterMessage = OpenRouter['chat']['send'] extends (a: { chatRequest: { messages: Array<infer Message> } }) => infer U1 ? Message : never
-// 🤡🤡🤡🤡🤡🤡🤡🤡🤡🤡
+// 🤡🤡🤡🤡🤡🤡🤡🤡🤡🤡🤡
 export type OpenRouterResponse = OpenRouter['chat']['send'] extends {
   (a: { chatRequest: { messages: any, stream: false } }): infer R
   (a: { chatRequest: { messages: any, stream: true } }): infer U1
