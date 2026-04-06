@@ -727,6 +727,12 @@ export async function reply(
       }
       if(response === undefined) {
         log.W('Skipping responding. OpenRouter/model died')
+        try {
+          await setMessageReaction(chatId, respondsToMessageId, '😴', log)
+        }
+        catch(err) {
+          log.E('While sending death reaction: ', [err])
+        }
         // It randomly crases, I don't know why.
         completion.sent = true
         break
