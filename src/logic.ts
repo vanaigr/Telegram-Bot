@@ -710,17 +710,29 @@ export async function reply(
 
     //log.I('Messages: ', util.inspect(openrouterMessages, { maxArrayLength: Infinity, maxStringLength: 4000, depth: Infinity }))
 
-    let response: OpenRouterResponse
-    try {
-      response = await sendPrompt(openRouter, openrouterMessages, systemPrompt)
+
+    let response: OpenRouterResponse | undefined
+    {
+      let remainingRetries = 3
+      while(remainingRetries > 0) {
+        try {
+          response = await sendPrompt(openRouter, openrouterMessages, systemPrompt)
+          break
+        }
+        catch(error) {
+          remainingRetries--
+          log.E('During response generation: ', [error], '. Remaining retries: ', [remainingRetries])
+          await U.sleepUntil(T.Now.instant().add({ seconds: 3 }))
+        }
+      }
+      if(response === undefined) {
+        log.W('Skipping responding. OpenRouter/model died')
+        // It randomly crases, I don't know why.
+        completion.sent = true
+        break
+      }
     }
-    catch(error) {
-      log.E('During response generation: ', [error])
-      cancelTypingStatus()
-      // It randomly crases, I don't know why.
-      completion.sent = true
-      break
-    }
+
     log.I('Received generation: ', [response, 'details'])
 
     await Db.insertMany(
