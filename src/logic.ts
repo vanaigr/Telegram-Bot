@@ -1208,6 +1208,10 @@ type Reaction = {
   info: Types.MessageReactionUpdated
   reason: string
 }
+type Sticker = {
+  emoji: string | undefined
+  thumbnail: Photo | undefined
+}
 
 type MessageWithAttachments = {
   msg: Types.Message
@@ -1215,6 +1219,7 @@ type MessageWithAttachments = {
   photos: Photo[]
   video: Video | undefined
   videoNote: VideoNote | undefined
+  stickers: Sticker[]
   generation: OpenRouterMessage[]
   linkInfos: {
     url: string
@@ -1324,6 +1329,24 @@ export async function fetchMessages(
           })(),
         }
       })(),
+      stickers: ((): Sticker[] => {
+        const sticker = msg.sticker
+        if(!sticker) return []
+
+        return [{
+          emoji: sticker.emoji,
+          thumbnail: (() => {
+            const photo = sticker.thumbnail
+            if(!photo) return undefined
+            return {
+              file_unique_id: photo.file_unique_id,
+              status: 'not-available',
+              data: Buffer.from([]),
+              info: photo,
+            }
+          })(),
+        }]
+      })(),
       linkInfos: [],
     }
   })
@@ -1346,12 +1369,16 @@ export async function fetchMessages(
     for(let off = 0; off < Math.min(10, messages.length); off++) {
       const message = messages[messages.length - 1 - off]
 
-      const { photos, video, videoNote } = message
+      const { photos, video, videoNote, stickers } = message
       for(let j = photos.length - 1; j > -1; j--) {
         fileUniqueIds.add(photos[j].file_unique_id)
       }
       if(video?.thumbnail) fileUniqueIds.add(video.thumbnail.file_unique_id)
       if(videoNote?.thumbnail) fileUniqueIds.add(videoNote.thumbnail.file_unique_id)
+      for(const it of stickers) {
+        const id = it.thumbnail?.file_unique_id
+        if(id) fileUniqueIds.add(id)
+      }
     }
 
     const t = Db.t.photos
@@ -1387,6 +1414,17 @@ export async function fetchMessages(
       }
       if(message.videoNote?.thumbnail) {
         const photo = message.videoNote.thumbnail
+        if(!photo) continue
+        const photoRow = photoRowsById.get(photo.file_unique_id)
+        if(photoRow !== undefined) {
+          photo.status = photoRow.status
+          photo.data = photoRow.bytes
+          addPhoto(message, photo)
+        }
+      }
+
+      for(const it of message.stickers) {
+        const photo = it.thumbnail
         if(!photo) continue
         const photoRow = photoRowsById.get(photo.file_unique_id)
         if(photoRow !== undefined) {
@@ -1539,7 +1577,7 @@ export async function messagesToModelInput(
 */
 
   for(const message of messages) {
-    const { msg, photos, video, videoNote, reactions, linkInfos } = message
+    const { msg, photos, video, videoNote, stickers, reactions, linkInfos } = message
     if(msg.new_chat_title !== undefined) {
       openrouterMessages.push({
         role: 'user',
@@ -1671,11 +1709,19 @@ export async function messagesToModelInput(
         text: `<location lat: ${msg.location.latitude}, lon: ${msg.location.longitude}>`,
       })
     }
-    if(msg.sticker) {
+    for(const sticker of stickers) {
       content.push({
         type: 'text' as const,
-        text: `<sticker ${msg.sticker.emoji ?? 'not available'}>`,
+        text: `<sticker ${sticker.emoji ?? 'not available'}>`,
       })
+      if(sticker.thumbnail?.status === 'done') {
+        content.push(await photoToMessagePart(
+          log,
+          sticker.thumbnail,
+          '<sticker image not available>',
+        ))
+
+      }
     }
     for(const linkInfo of linkInfos) {
       content.push({
