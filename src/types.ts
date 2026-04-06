@@ -39,7 +39,7 @@ export type Message = {
 }
 
 export type MessageEntity = {
-  type: ('text_link' | 'bold' | 'italic' | 'underline' | 'strikethrough' | 'spoiler' | 'blockquote' | 'expandable_blockquote' | 'code' | 'pre') & {}
+  type: ('text_link' | 'bold' | 'italic' | 'underline' | 'strikethrough' | 'spoiler' | 'blockquote' | 'expandable_blockquote' | 'code' | 'pre' | 'custom_emoji' | 'url' | 'bot_command') & {}
   offset: number
   length: number
   url?: string

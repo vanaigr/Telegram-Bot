@@ -2088,7 +2088,12 @@ export function entitiesToMd(
         }
       }
       else {
-        log.I('Skipping unsupported ', [it])
+        if(it.type === 'custom_emoji' || it.type === 'url' || it.type === 'bot_command') {
+          // do nothing
+        }
+        else {
+          log.I('Skipping unsupported ', [it])
+        }
       }
     }
   }
