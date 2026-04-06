@@ -46,20 +46,26 @@ export async function POST(req: Request): Promise<Response> {
   }
 }
 
+const channelToLevel = {
+  I: 'info',
+  W: 'warn',
+  E: 'error',
+}
+
 function makeLogger(reqId: string) {
   const token = process.env.AXIOM_TOKEN
   const dataset = process.env.AXIOM_DATASET
 
   if(!token || !dataset) return
 
-  const savedLogs: { reqId: string, channel: string, _time: string, text: string }[] = []
+  const savedLogs: { reqId: string, level: string, _time: string, text: string }[] = []
 
   let lastFlush: Promise<unknown> = Promise.resolve()
   let pendingFlush: Promise<unknown> | undefined
 
   return {
-    logger: (channel: string, timestamp: string, text: string) => {
-      savedLogs.push({ reqId, channel, _time: timestamp, text })
+    logger: (channel: L.Channel, timestamp: string, text: string) => {
+      savedLogs.push({ reqId, level: channelToLevel[channel], _time: timestamp, text })
 
       if(pendingFlush === undefined) {
         const flushRun = (async() => {
