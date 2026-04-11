@@ -1986,7 +1986,7 @@ export function messageText(msg: Types.Message, log: L.Log) {
     return entitiesToMd(msg.text, msg.entities ?? [], log).trim()
   }
   else if(msg.caption) {
-    return msg.caption.trim()
+    return entitiesToMd(msg.caption, msg.caption_entities ?? [], log).trim()
   }
   return '<no message>'
 }
@@ -2152,7 +2152,7 @@ export function entitiesToMd(
         }
       }
       else {
-        if(it.type === 'custom_emoji' || it.type === 'url' || it.type === 'bot_command') {
+        if(it.type === 'custom_emoji' || it.type === 'url' || it.type === 'bot_command' || it.type === 'mention') {
           // do nothing
         }
         else {

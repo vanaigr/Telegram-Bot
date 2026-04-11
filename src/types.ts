@@ -19,6 +19,7 @@ export type Message = {
   text?: string
   caption?: string
   entities?: MessageEntity[]
+  caption_entities?: MessageEntity[]
 
   photo?: PhotoSize[]
   video?: Video
@@ -39,7 +40,7 @@ export type Message = {
 }
 
 export type MessageEntity = {
-  type: ('text_link' | 'bold' | 'italic' | 'underline' | 'strikethrough' | 'spoiler' | 'blockquote' | 'expandable_blockquote' | 'code' | 'pre' | 'custom_emoji' | 'url' | 'bot_command') & {}
+  type: ('text_link' | 'bold' | 'italic' | 'underline' | 'strikethrough' | 'spoiler' | 'blockquote' | 'expandable_blockquote' | 'code' | 'pre' | 'custom_emoji' | 'url' | 'bot_command' | 'mention') & {}
   offset: number
   length: number
   url?: string
