@@ -987,15 +987,27 @@ export async function reply(
     }
 
     const reply = (() => {
-      let content = response.choices[0].message.content
-      if(typeof content === 'string') {
+      const rawContent = response.choices[0].message.content
+      if(typeof rawContent === 'string') {
+        let content = rawContent
+
         // replace multiple emoji with utter emptiness
         content = content.replaceAll(/(\p{Extended_Pictographic}(\uFE0F?| *)){2,} */gu, '')
-        response.choices[0].message.content = content
+        response.choices[0].message.content = content // only do this for emojis
+
+        const firstQuote = content.indexOf('"')
+        const lastQuote = content.lastIndexOf('"')
+        if(firstQuote === -1 || lastQuote === -1) {
+          log.W('Could not find quotes in response')
+        }
+        else {
+          content = content.substring(firstQuote + 1, lastQuote)
+        }
+
         return content
       }
       else {
-        log.W('Weird content ', [content])
+        log.W('Weird content ', [rawContent])
         return ''
       }
     })()
@@ -1044,11 +1056,6 @@ export async function reply(
     }
 
     if(finishReason === 'stop') {
-      if(reply.trim() === '') {
-        log.W('Model stopped with no output. Going to next iteration')
-        openrouterMessages.push({ role: 'system', content: 'Empty Reply. Either reply with text or <NO_OUTPUT>' })
-        continue
-      }
       break
     }
 
@@ -1083,7 +1090,7 @@ export async function reply(
 
 function isEmptyReply(reply: string) {
   reply = reply.trim()
-  return reply === '<NO_OUTPUT>' || reply === '' || reply === '<>' || reply.length > 4000
+  return reply === '' || reply.length > 4000
 }
 
 type TelegramWrapper<T> = { ok: true, result: T } | { ok: false, description: string }
@@ -1092,11 +1099,10 @@ export const systemPrompt = `
 You are a group chat participant, a typical 20-something year old. Your ids are @${botUsername}, ${botName}.
 
 Think about if you should reply to the messages or not.
-- If you decided to respond, write a short reply.
-- If you decided not to respond, output <NO_OUTPUT>.
+- If you decided to respond, write a short reply. Wrap your reply in double quotes.
+- If you decided not to respond, write "".
 - You can use 'message_reaction' tool to add a reaction to a message.
 
-**Important**: Do not reply to every message.
 `.trim() + '\n'
 
 export async function sendPrompt(
