@@ -250,12 +250,26 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
       log.I('Bot is globally disabled')
       return
     }
-    if(!whitelistInfo.enabled) {
-      log.I('Bot in chat is disabled')
-      return
-    }
     if(edit) {
       log.I('Not replying to edits')
+      return
+    }
+
+    const shouldAnswer = (() => {
+      if(whitelistInfo.enabled) return true
+
+      const messageText = message.text ?? message.caption ?? ''
+      const mentions = (message.entities ?? message.caption_entities ?? [])
+        .filter(it => it.type === 'mention')
+        .map(it => messageText.substring(it.offset, it.offset + it.length))
+
+      if(mentions.includes('@' + Logic.botUsername)) return true
+
+      return false
+    })()
+
+    if(!shouldAnswer) {
+      log.I('Bot in chat is disabled')
       return
     }
 
