@@ -166,12 +166,8 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
         'where', Db.eq(t.id, Db.param(BigInt(message.chat.id))),
       )
 
-      const emojis = ['👍', '😇', '😍', '😜', '😭', '🤞', '🤡', '🤢', '🤰']
-      const text = 'Бот воскрешен '
-        + emojis[Math.floor(Math.random() * emojis.length)]
-        + '. /stop чтобы выключить'
+      await Logic.setMessageReaction(message.chat.id, message.message_id, '👍', log)
 
-      await Logic.sendMessage(message.chat.id, { text, entities: [] }, log)
       return new Response()
     }
     else if(message.text?.startsWith('/stop')) {
@@ -184,12 +180,8 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
         'where', Db.eq(t.id, Db.param(BigInt(message.chat.id))),
       )
 
-      const emojis = ['👍', '😌', '😇', '😈', '🗿', '😓', '🙂', '☠', '💀', '⚰️']
-      const text = 'Бот убит '
-        + emojis[Math.floor(Math.random() * emojis.length)]
-        + '. /start чтобы включить'
+      await Logic.setMessageReaction(message.chat.id, message.message_id, '👍', log)
 
-      await Logic.sendMessage(message.chat.id, { text, entities: [] }, log)
       return new Response()
     }
   }

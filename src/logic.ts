@@ -1882,7 +1882,7 @@ async function sendChatAction(chatId: number, log: L.Log) {
   })
 }
 
-async function setMessageReaction(chatId: number, messageId: number, emoji: string, log: L.Log) {
+export async function setMessageReaction(chatId: number, messageId: number, emoji: string, log: L.Log) {
   const l = log.addedCtx('setMessageReaction(', [chatId], ', ', [messageId], ', ', [emoji], ')')
 
   const result = await U.request<TelegramWrapper<{}>>({
