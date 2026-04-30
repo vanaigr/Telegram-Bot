@@ -1619,26 +1619,28 @@ export async function messagesToModelInput(
       continue
     }
 
-    openrouterMessages.push({
-      role: 'system',
-      content: [{
-        type: 'text',
-        text: messageHeaders(msg, reactions),
-      }],
-    })
+    const metadataObject: OpenRouterMessage = {
+        role: 'system',
+        content: [{
+          type: 'text',
+          text: messageMetadata(msg, reactions),
+        }],
+      }
 
     if(msg.from?.username === botUsername) {
       openrouterMessages.push({
         role: 'assistant',
         content: [{ type: 'text', text: msg.text ?? '<ERROR: NO TEXT>' }],
       })
+      openrouterMessages.push(metadataObject)
       continue
     }
 
     let text = ''
     if(msg.reply_to_message) {
-      const replyText = messageHeaders(msg.reply_to_message, undefined)
+      const replyText = ''
         + messageText(msg.reply_to_message, log)
+        + messageMetadata(msg.reply_to_message, undefined)
 
       text += replyText.split('\n').map(it => '> ' + it).join('\n')
       text += '\n'
@@ -1744,6 +1746,8 @@ export async function messagesToModelInput(
     }
 
     openrouterMessages.push({ role: 'user', content })
+    openrouterMessages.push(metadataObject)
+
     for(const msg of message.generation) {
       openrouterMessages.push(msg)
     }
@@ -1932,17 +1936,17 @@ export function fromMessageDate(messageDate: number) {
   return T.Instant.fromEpochMilliseconds(messageDate * 1000)
 }
 
-export function messageHeaders(
+export function messageMetadata(
   msg: Types.Message,
   reactions: Reaction[] | undefined
 ) {
   let headers = ''
   if(msg.from) {
-    headers += '# ' + userToString(msg.from, true) + '\n'
+    headers += '- Sent by: ' + userToString(msg.from, true) + '\n'
   }
   else {
     // Never seen this field missing.
-    headers += '# ' + userToString(undefined, true) + '\n'
+    headers += '- Sent by: ' + userToString(undefined, true) + '\n'
   }
   headers += '- messageId: ' + msg.message_id + '\n'
   headers += '- At: ' + dateToString(fromMessageDate(msg.date)) + '\n'
@@ -1952,6 +1956,7 @@ export function messageHeaders(
   }
   */
 
+  /*
   if(reactions) {
     const reactionsObj: string[] = []
 
@@ -1981,8 +1986,7 @@ export function messageHeaders(
       headers += reactionsObj.join('\n') + '\n'
     }
   }
-
-  headers += '- Text:\n'
+  */
 
   return headers
 }
