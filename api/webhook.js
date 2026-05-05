@@ -7,4 +7,9 @@
 // use that instead of desecrating my code.
 // The best part is they could've just not checked for this file
 // before starting the build and nothing would've changed.
-export * from '../why-is-vercel-so-bad-why-can-i-not-do-custom-build-of-server-functions-why-does-vercel-node-package-not-rewrite-ts-extension.js'
+
+import * as YouBrokeItAgainThanksVercel from '../why-is-vercel-so-bad-why-can-i-not-do-custom-build-of-server-functions-why-does-vercel-node-package-not-rewrite-ts-extension.js'
+
+export function POST(...args) {
+    return YouBrokeItAgainThanksVercel.POST(...args)
+}
