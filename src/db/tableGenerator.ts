@@ -4,6 +4,8 @@ import path from 'node:path';
 import G from '@prisma/generator-helper';
 import P from '@prisma/internals';
 
+import * as U from '../lib/util.ts'
+
 type DbTypeInfo = { dbText: string; inputType: string; outputType: string, escape?: boolean };
 const nonNullBuiltinTypes: DbTypeInfo[] = [
   {
@@ -109,7 +111,7 @@ G.generatorHandler({
 
       const propertyName = [
         parts[0]!,
-        ...parts.slice(1).map((it) => it[0]!.toUpperCase() + it.substring(1).toLowerCase()),
+        ...parts.slice(1).map((it) => it[0]!.toUpperCase() + U.basedSlice(it, 1).toLowerCase()),
       ].join('');
       const propertyNameNullable = propertyName + 'Nullable';
       const propertyNameArray = propertyName + 'Array';

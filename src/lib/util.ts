@@ -90,3 +90,7 @@ export function sleepUntil(until: T.Instant) {
   });
 }
 
+/** Works as you would actually want. End-exclusive, no magic */
+export function basedSlice<T extends Array<unknown> | string>(it: T, begin: number, end?: number): T {
+  return it.slice(Math.max(begin, 0), end !== undefined ? Math.max(end, 0) : undefined) as T
+}

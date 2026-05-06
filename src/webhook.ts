@@ -253,7 +253,7 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
       const messageText = message.text ?? message.caption ?? ''
       const mentions = (message.entities ?? message.caption_entities ?? [])
         .filter(it => it.type === 'mention')
-        .map(it => messageText.substring(it.offset, it.offset + it.length))
+        .map(it => U.basedSlice(messageText, it.offset, it.offset + it.length))
 
       if(mentions.includes('@' + Logic.botUsername)) return true
 

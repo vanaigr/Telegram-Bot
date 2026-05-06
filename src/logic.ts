@@ -997,7 +997,7 @@ export async function reply(
 
         const beginI = content[0] === '"' ? 1 : 0
         const endI = content[content.length - 1] === '"' ? content.length - 1 : content.length
-        content = content.substring(Math.min(endI, beginI), endI)
+        content = U.basedSlice(content, Math.min(endI, beginI), endI)
 
         return content
       }
@@ -2114,7 +2114,7 @@ export function entitiesToMd(
   const parts: ([string] | 'quoteBegin' | 'quoteEnd')[] = []
   let endCodeUnit = 0
   for(const [pos, list] of byPosList) {
-    parts.push([text.substring(endCodeUnit, pos)])
+    parts.push([U.basedSlice(text, endCodeUnit, pos)])
     endCodeUnit = pos
 
     for(const [it, variant] of list) {
@@ -2166,7 +2166,7 @@ export function entitiesToMd(
       }
     }
   }
-  parts.push([text.substring(endCodeUnit)])
+  parts.push([U.basedSlice(text, endCodeUnit)])
 
   const partsWithQuotes: string[] = []
   for(let i = 0; i < parts.length; i++) {
@@ -2216,7 +2216,7 @@ export function entitiesToMd(
       ...toClose.map(it => it.offset + it.length),
     )
 
-    parts.push([text.substring(endCodeUnit, stopAt)])
+    parts.push([U.basedSlice(text, endCodeUnit, stopAt)])
     // entities are applied fifo, so this needs to be backwards
     for(let i = toClose.length - 1; i > -1; i--) {
       const it = toClose[i]
@@ -2299,7 +2299,7 @@ export function entitiesToMd(
 
     endCodeUnit = stopAt
   }
-  parts.push([text.substring(endCodeUnit)])
+  parts.push([U.basedSlice(text, endCodeUnit)])
 
   const partsWithQuotes: string[] = []
   for(let i = 0; i < parts.length; i++) {
@@ -2497,7 +2497,7 @@ export function mdToTextParts(
     const prev = sections.at(-1)
 
     if(line.startsWith('>')) {
-      const l = line.substring(1).trimStart()
+      const l = U.basedSlice(line, 1).trimStart()
       if(prev?.[1] === true) {
         sections[sections.length - 1][0] += '\n' + l
       }
@@ -2603,7 +2603,7 @@ export function mdToTextParts(
           text.push({ type: 'd', v: 'code', active: true })
           i += 3
           const end = notStupidEnd(section, it => it.indexOf('```', i))
-          text.push({ type: 'n', text: section.substring(i, end) })
+          text.push({ type: 'n', text: U.basedSlice(section, i, end) })
           text.push({ type: 'd', v: 'code', active: false })
           i = end + 3
         }
@@ -2611,7 +2611,7 @@ export function mdToTextParts(
           text.push({ type: 'd', v: 'inlineCode', active: true })
           i += 1
           const end = notStupidEnd(section, it => it.indexOf('`', i))
-          text.push({ type: 'n', text: section.substring(i, end) })
+          text.push({ type: 'n', text: U.basedSlice(section, i, end) })
           text.push({ type: 'd', v: 'inlineCode', active: false })
           i = end + 1
         }
@@ -2624,8 +2624,8 @@ export function mdToTextParts(
               if(urlEnd !== -1) {
                 text.push({
                   type: 'l',
-                  text: section.substring(i + 1, textEnd),
-                  url: section.substring(urlStart + 1, urlEnd),
+                  text: U.basedSlice(section, i + 1, textEnd),
+                  url: U.basedSlice(section, urlStart + 1, urlEnd),
                 })
                 i = urlEnd + 1
                 continue
@@ -2636,11 +2636,11 @@ export function mdToTextParts(
 
         {
           let end = i + notStupidEnd(
-            section.substring(i), // 🤡
+            U.basedSlice(section, i), // 🤡
             it => it.search(/[*_~|`\[]/),
           )
 
-          text.push({ type: 'n', text: section.substring(i, end) })
+          text.push({ type: 'n', text: U.basedSlice(section, i, end) })
           i = end
         }
       }

@@ -2,6 +2,7 @@ import fsp from 'node:fs/promises';
 import util from 'node:util';
 
 import * as T from './temporal.ts';
+import * as U from './util.ts';
 
 export type ContextValue = readonly [context: Message, 'context'];
 export type Value =
@@ -223,7 +224,7 @@ function dtToString(dt: T.ZonedDateTime) {
   });
   let off = dt.offset;
   if (off.endsWith(':00')) {
-    off = off.substring(0, off.length - 3);
+    off = U.basedSlice(off, 0, off.length - 3);
     const offInt = parseInt(off);
     if (isFinite(offInt)) {
       off = offInt.toString();
