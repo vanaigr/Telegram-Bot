@@ -995,14 +995,9 @@ export async function reply(
         content = content.replaceAll(/(\p{Extended_Pictographic}(\uFE0F?| *)){2,} */gu, '')
         response.choices[0].message.content = content // only do this for emojis
 
-        const firstQuote = content.indexOf('"')
-        const lastQuote = content.lastIndexOf('"')
-        if(firstQuote === -1 || lastQuote === -1) {
-          log.W('Could not find quotes in response')
-        }
-        else {
-          content = content.substring(firstQuote + 1, lastQuote)
-        }
+        const beginI = content[0] === '"' ? 1 : 0
+        const endI = content[content.length - 1] === '"' ? content.length - 1 : content.length
+        content = content.substring(Math.min(endI, beginI), endI)
 
         return content
       }
