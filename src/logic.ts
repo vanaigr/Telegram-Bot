@@ -993,7 +993,9 @@ export async function reply(
 
         // replace multiple emoji with utter emptiness
         content = content.replaceAll(/(\p{Extended_Pictographic}(\uFE0F?| *)){2,} */gu, '')
-        response.choices[0].message.content = content // only do this for emojis
+        content = content.trim()
+        // maybe I'm not supposed to do this
+        //response.choices[0].message.content = content // only do this for emojis
 
         const beginI = content[0] === '"' ? 1 : 0
         const endI = content[content.length - 1] === '"' ? content.length - 1 : content.length
