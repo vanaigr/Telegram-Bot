@@ -1579,7 +1579,11 @@ export async function messagesToModelInput(
   }
 */
 
-  for(const message of messages) {
+  const messageSubset = messages.slice(
+    messages.findLastIndex(it => it.msg.text?.startsWith('/amnesia')) + 1
+  )
+
+  for(const message of messageSubset) {
     const { msg, photos, video, videoNote, stickers, reactions, linkInfos } = message
     if(msg.new_chat_title !== undefined) {
       openrouterMessages.push({
@@ -1750,7 +1754,6 @@ export async function messagesToModelInput(
     }
   }
 
-  // Crashes openrouter
   ;(() => {
     if(!caching) return
 
