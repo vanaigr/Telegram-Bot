@@ -113,6 +113,10 @@ export const tables = {
         "updatedAt": t_timestamp,
         "raw": t_json,
     },
+    "chatNotes": {
+        "id": t_bigint,
+        "notes": t_textArray,
+    },
     "photos": {
         "chatId": t_bigint,
         "fileUniqueId": t_text,

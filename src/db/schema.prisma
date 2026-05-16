@@ -66,6 +66,11 @@ model chatFullInfo {
     raw Json
 }
 
+model chatNotes {
+    id BigInt @id
+    notes String[]
+}
+
 enum downloadStatus {
     downloading
     error

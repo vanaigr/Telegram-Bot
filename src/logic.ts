@@ -519,6 +519,12 @@ export async function reply(
   log.I('Locked ', [chatId])
   // Lock aquired - no new replies will be inserted.
 
+  const notesPromise = Db.query(pool,
+    'select', [Db.t.chatNotes.notes],
+    'from', Db.t.chatNotes,
+    'where', Db.eq(Db.t.chatNotes.id, Db.param(BigInt(chatId))),
+  ).then(it => it.at(0)?.notes ?? [])
+
   const firstLatest = await Db.query(pool,
     'select', [
       Db.t.messages.messageId,
@@ -622,6 +628,7 @@ export async function reply(
     await U.delay(until)
   }
 
+  const notes = await notesPromise
   const messages = await fetchMessages(pool, log, chatId)
   const respondsToMessage = messages.at(-1)!
   const respondsToMessageId = respondsToMessage.msg.message_id
@@ -629,6 +636,7 @@ export async function reply(
   log.I('Will be responding to ', [respondsToMessageId])
 
   const openrouterMessages: OpenRouterMessage[] = await messagesToModelInput({
+    notes,
     messages,
     chatInfo: await chatInfoP,
     log,
@@ -653,6 +661,9 @@ export async function reply(
 
   let thisMessageGeneration: OpenRouterMessage[] = []
   let photoToSend: { data: Buffer, mime: string } | undefined
+
+  const notesToModify = notes.slice()
+  let notesModified = false
 
   const cancelTypingStatus = startTypingTask(chatId, log)
 
@@ -964,6 +975,50 @@ export async function reply(
             }
           }
         }
+        if(tool.function.name === 'take_note') {
+          let { note } = args
+
+          if(typeof note === 'string' && (note = note.trim())) {
+            // NOTE: even though we're running these async, since the body up to this point is sync,
+            // modifications on notes are guaranteed to happen in the right order.
+            const existingI = notesToModify.indexOf(note)
+            if(existingI !== -1) {
+              notesModified = true
+              notesToModify.splice(existingI, 1)
+              notesToModify.push(note)
+            }
+            else {
+              if(note.length > 200) {
+                l.E('Note is too long')
+                return {
+                  role: 'tool' as const,
+                  toolCallId: tool.id,
+                  content: 'Error: note is too long (200 symbols max)',
+                }
+              }
+
+              notesModified = true
+              notesToModify.push(note)
+              if(notesToModify.length > 10) {
+                notesToModify.unshift()
+              }
+            }
+
+            return {
+              role: 'tool' as const,
+              toolCallId: tool.id,
+              content: 'done',
+            }
+          }
+          else {
+            l.E('Invalid note')
+            return {
+              role: 'tool' as const,
+              toolCallId: tool.id,
+              content: 'Error: note is empty or missing',
+            }
+          }
+        }
         else {
           l.W('Unknown tool ', [tool])
           return {
@@ -977,6 +1032,21 @@ export async function reply(
       for(const result of results) {
         openrouterMessages.push(result)
         thisMessageGeneration.push(result)
+      }
+
+      if(notesModified) {
+        notesModified = false
+
+        const idArg = Db.param(BigInt(chatId))
+        const notesArg = Db.param(notesToModify)
+        await Db.queryRaw(pool,
+          'insert into', Db.t.chatNotes, Db.args([Db.t.chatNotes.id.nameOnly, Db.t.chatNotes.notes.nameOnly]),
+          'values', Db.args([idArg, notesArg]),
+          'on conflict', Db.args([Db.t.chatNotes.id.nameOnly]), 'do update set',
+          Db.list([
+            Db.set(Db.t.chatNotes.notes, notesArg),
+          ]),
+        )
       }
     }
 
@@ -1100,6 +1170,8 @@ Think about if you should reply to the messages or not.
 - If you decided not to respond, write "".
 - You can use 'message_reaction' tool to add a reaction to a message.
 
+Use "take_note" tool to note concicely anything that might be important long-term context.
+
 `.trim() + '\n'
 
 export async function sendPrompt(
@@ -1171,6 +1243,22 @@ export async function sendPrompt(
                 },
               },
               required: ["prompt"],
+            },
+          },
+        },
+        {
+          type: 'function',
+          function: {
+            name: 'take_note',
+            description: 'Adds a new note at the end. Only last 10 notes are saved, but you can re-add the same note to move it to the end.',
+            parameters: {
+              type: "object",
+              properties: {
+                note: {
+                  type: "string",
+                },
+              },
+              required: ["note"],
             },
           },
         },
@@ -1545,9 +1633,10 @@ type LlmMessage = {
 export async function messagesToModelInput(
   {
     //summaries,
-    messages, log, chatInfo, caching,
+    notes, messages, log, chatInfo, caching,
   }: {
     //summaries: string[],
+    notes: string[],
     messages: MessageWithAttachments[],
     chatInfo: Types.ChatFullInfo | undefined,
     log: L.Log
@@ -1555,6 +1644,21 @@ export async function messagesToModelInput(
   }
 ): Promise<OpenRouterMessage[]> {
   const openrouterMessages: OpenRouterMessage[] = []
+
+  openrouterMessages.push({
+    role: 'system',
+    content: [
+      {
+        type: 'text',
+        text: '<notes>\n',
+      },
+      ...notes.map(it => ({ type: 'text' as const, text: '<note>' + it + '</note>\n' })),
+      {
+        type: 'text',
+        text: '</notes>\n',
+      },
+    ]
+  })
 
   if(chatInfo) {
     openrouterMessages.push({
