@@ -185,7 +185,10 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
       return new Response()
     }
     else if(message.text?.startsWith('/whisper')) {
-      log.I('Ignoring since ignore command')
+      log.I('Ignoring since /whisper')
+
+      await Logic.setMessageReaction(message.chat.id, message.message_id, '🙉', log)
+
       return new Response()
     }
     else if(message.text?.startsWith('/notes')) {
