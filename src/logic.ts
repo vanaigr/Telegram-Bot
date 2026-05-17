@@ -2123,6 +2123,7 @@ function dateToString(date: T.Instant) {
   return dt.toLocaleString(undefined, { weekday: 'short' })
     + ' '
     + dt.toString().replace('T', ' ')
+    + ' +3'
 }
 
 function startTypingTask(chatId: number, log: L.Log) {
