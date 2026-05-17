@@ -188,6 +188,16 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
       log.I('Ignoring since ignore command')
       return new Response()
     }
+    else if(message.text?.startsWith('/notes')) {
+      log.I('Requested notes')
+
+      const notes = await Logic.getNotes(pool, message.chat.id)
+      const text = notes.map((it, i) => (1 + i) + '. ' + it).join('\n')
+
+      await Logic.sendMessage(message.chat.id, { text, entities: [] }, log)
+
+      return new Response()
+    }
   }
 
   await Db.timedTran(pool, async(db) => {

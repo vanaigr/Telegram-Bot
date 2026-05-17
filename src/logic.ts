@@ -519,11 +519,7 @@ export async function reply(
   log.I('Locked ', [chatId])
   // Lock aquired - no new replies will be inserted.
 
-  const notesPromise = Db.query(pool,
-    'select', [Db.t.chatNotes.notes],
-    'from', Db.t.chatNotes,
-    'where', Db.eq(Db.t.chatNotes.id, Db.param(BigInt(chatId))),
-  ).then(it => it.at(0)?.notes ?? [])
+  const notesPromise = getNotes(pool, chatId)
 
   const firstLatest = await Db.query(pool,
     'select', [
@@ -2777,4 +2773,12 @@ function formatDurationSec(value: number): string {
   return sign + Math.floor(value /  60 / 60)
     + ':' + (Math.floor(value / 60) % 60).toString().padStart(2, '0')
     + ':' + (Math.floor(value) % 60).toString().padStart(2, '0')
+}
+
+export async function getNotes(db: Db.DbConnOrPool, chatId: number) {
+  return await Db.query(db,
+    'select', [Db.t.chatNotes.notes],
+    'from', Db.t.chatNotes,
+    'where', Db.eq(Db.t.chatNotes.id, Db.param(BigInt(chatId))),
+  ).then(it => it.at(0)?.notes ?? [])
 }
