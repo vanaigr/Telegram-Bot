@@ -995,8 +995,8 @@ export async function reply(
 
               notesModified = true
               notesToModify.push(note)
-              if(notesToModify.length > 10) {
-                notesToModify.unshift()
+              if(notesToModify.length >= 10) {
+                notesToModify.shift()
               }
             }
 
