@@ -650,10 +650,6 @@ export async function reply(
     log.I('Skipped asking bot to not respond')
   }
   */
-  openrouterMessages.push({
-    role: 'system',
-    content: 'Reminder: Do not reply to every message. Do not repeat yourself or others. Pay attention to user names. Do not reply to every message.'
-  })
 
   let thisMessageGeneration: OpenRouterMessage[] = []
   let photoToSend: { data: Buffer, mime: string } | undefined
@@ -1648,7 +1644,12 @@ export async function messagesToModelInput(
         type: 'text',
         text: '<notes>\n',
       },
-      ...notes.map(it => ({ type: 'text' as const, text: '<note>' + it + '</note>\n' })),
+      ...[
+        'I should only respond to 60% of messages, unless I\'m asked to respond',
+        ...notes,
+      ].map(it => {
+        return { type: 'text' as const, text: '<note>' + it + '</note>\n' }
+      }),
       {
         type: 'text',
         text: '</notes>\n',
