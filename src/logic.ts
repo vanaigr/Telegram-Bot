@@ -146,7 +146,7 @@ export async function startPhotoTask(
       fileUniqueId: photo.file_unique_id,
       raw: JSON.stringify(photo),
       status: 'downloading',
-      bytes: Buffer.from([]),
+      bytes: emptyBuffer,
       downloadStartDate: T.Now.instant().toJSON(),
     }], {})
 
@@ -399,7 +399,7 @@ export async function startImageTask(
     await Db.insertMany(db, t, schema, [{
       key,
       status: 'downloading',
-      bytes: Buffer.from([]),
+      bytes: emptyBuffer,
       downloadStartDate: T.Now.instant().toJSON(),
     }], {})
 
@@ -1371,7 +1371,7 @@ export async function fetchMessages(
           {
             file_unique_id: photo.file_unique_id,
             status: 'not-available',
-            data: Buffer.from([]),
+            data: emptyBuffer,
             info: photo,
           }
         ]
@@ -1388,7 +1388,7 @@ export async function fetchMessages(
             return {
               file_unique_id: photo.file_unique_id,
               status: 'not-available',
-              data: Buffer.from([]),
+              data: emptyBuffer,
               info: photo,
             }
           })(),
@@ -1406,7 +1406,7 @@ export async function fetchMessages(
             return {
               file_unique_id: photo.file_unique_id,
               status: 'not-available',
-              data: Buffer.from([]),
+              data: emptyBuffer,
               info: photo,
             }
           })(),
@@ -1424,7 +1424,7 @@ export async function fetchMessages(
             return {
               file_unique_id: photo.file_unique_id,
               status: 'not-available',
-              data: Buffer.from([]),
+              data: emptyBuffer,
               info: photo,
             }
           })(),
@@ -1434,16 +1434,29 @@ export async function fetchMessages(
     }
   })
 
-  type PhotoSubset = { status: 'done' | 'downloading' | 'error' | 'not-available', data: Buffer }
-  const photosByMessage = new Map<number, PhotoSubset[]>()
-  const addPhoto = (message: MessageWithAttachments, photo: PhotoSubset) => {
+  type PhotoStatus = 'done' | 'downloading' | 'error' | 'not-available'
+  type PhotoSubset = { status: PhotoStatus, data: Buffer }
+  type PhotoQuotaCandidate = {
+    photo: PhotoSubset
+    byteLength: number
+    source:
+      | { type: 'photo', fileUniqueId: string }
+      | { type: 'image', key: string }
+  }
+  const photosByMessage = new Map<number, PhotoQuotaCandidate[]>()
+  const addQuotaCandidate = (
+    message: MessageWithAttachments,
+    photo: PhotoSubset,
+    byteLength: number,
+    source: PhotoQuotaCandidate['source'],
+  ) => {
     const key = message.msg.message_id
     let arr = photosByMessage.get(key)
     if(arr === undefined) {
       arr = []
       photosByMessage.set(key, arr)
     }
-    arr.push(photo)
+    arr.push({ photo, byteLength, source })
   }
 
   if(ctx?.skipImages !== true) {
@@ -1467,13 +1480,19 @@ export async function fetchMessages(
     const t = Db.t.photos
     const arrayP = Db.param([...fileUniqueIds])
     const photoRows = await Db.query(conn,
-      'select', [t.status, t.bytes, t.fileUniqueId, t.raw],
+      'select', [
+        t.status,
+        t.fileUniqueId,
+        Db.named(
+          'byteLength',
+          Db.func<typeof Db.dbTypes.integer>('octet_length', t.bytes),
+        ),
+      ],
       'from', t,
       'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
       'and', t.fileUniqueId, '=', Db.func('any', arrayP),
       'and', Db.eq(t.status, Db.param('done' as const)),
       'order by', Db.func('array_position', arrayP, t.fileUniqueId),
-      'limit 5',
     )
     const photoRowsById = new Map(photoRows.map(it => [it.fileUniqueId, it]))
 
@@ -1482,8 +1501,10 @@ export async function fetchMessages(
         const photoRow = photoRowsById.get(photo.file_unique_id)
         if(photoRow !== undefined) {
           photo.status = photoRow.status
-          photo.data = photoRow.bytes
-          addPhoto(message, photo)
+          addQuotaCandidate(message, photo, photoRow.byteLength, {
+            type: 'photo',
+            fileUniqueId: photo.file_unique_id,
+          })
         }
       }
       if(message.video?.thumbnail) {
@@ -1491,8 +1512,10 @@ export async function fetchMessages(
         const photoRow = photoRowsById.get(photo.file_unique_id)
         if(photoRow !== undefined) {
           photo.status = photoRow.status
-          photo.data = photoRow.bytes
-          addPhoto(message, photo)
+          addQuotaCandidate(message, photo, photoRow.byteLength, {
+            type: 'photo',
+            fileUniqueId: photo.file_unique_id,
+          })
         }
       }
       if(message.videoNote?.thumbnail) {
@@ -1501,8 +1524,10 @@ export async function fetchMessages(
         const photoRow = photoRowsById.get(photo.file_unique_id)
         if(photoRow !== undefined) {
           photo.status = photoRow.status
-          photo.data = photoRow.bytes
-          addPhoto(message, photo)
+          addQuotaCandidate(message, photo, photoRow.byteLength, {
+            type: 'photo',
+            fileUniqueId: photo.file_unique_id,
+          })
         }
       }
 
@@ -1512,8 +1537,10 @@ export async function fetchMessages(
         const photoRow = photoRowsById.get(photo.file_unique_id)
         if(photoRow !== undefined) {
           photo.status = photoRow.status
-          photo.data = photoRow.bytes
-          addPhoto(message, photo)
+          addQuotaCandidate(message, photo, photoRow.byteLength, {
+            type: 'photo',
+            fileUniqueId: photo.file_unique_id,
+          })
         }
       }
     }
@@ -1540,7 +1567,14 @@ export async function fetchMessages(
       imageKeys.add(U.getHash('url', linkInfo.image))
     }
     const imagesList = await Db.query(conn,
-      'select', [images.key, images.bytes, images.status],
+      'select', [
+        images.key,
+        images.status,
+        Db.named(
+          'byteLength',
+          Db.func<typeof Db.dbTypes.integer>('octet_length', images.bytes),
+        ),
+      ],
       'from', images,
       'where', Db.inArr(images.key, [...imageKeys]),
     )
@@ -1553,20 +1587,32 @@ export async function fetchMessages(
       const linkInfo = linkInfosMap.get(url ?? '')
       if(linkInfo === undefined) continue
 
-      const photo = ((): PhotoSubset | undefined => {
+      const imageInfo = (() => {
         const url = linkInfo.image
         if(url === null) return undefined
-        const image = imagesMap.get(U.getHash('url', linkInfo.image))
+        const key = U.getHash('url', url)
+        const image = imagesMap.get(key)
         if(image === undefined) {
-          return { data: Buffer.from([]), status: 'not-available' }
+          return {
+            key,
+            byteLength: 0,
+            photo: { data: emptyBuffer, status: 'not-available' as const },
+          }
         }
 
         return {
-          data: Buffer.from(image.bytes),
-          status: image.status,
+          key,
+          byteLength: image.byteLength,
+          photo: { data: emptyBuffer, status: image.status },
         }
       })()
-      if(photo) addPhoto(message, photo)
+      const photo = imageInfo?.photo
+      if(photo?.status === 'done' && imageInfo !== undefined) {
+        addQuotaCandidate(message, photo, imageInfo.byteLength, {
+          type: 'image',
+          key: imageInfo.key,
+        })
+      }
 
       message.linkInfos.push({
         url: linkInfo.url,
@@ -1580,21 +1626,88 @@ export async function fetchMessages(
 {
     const photosList = [...photosByMessage].sort((a, b) => -(a[0] - b[0]))
     const photoQuota = { remainingCount: 5, remainingSize: 5_000_000 }
+    const selectedPhotos: PhotoQuotaCandidate[] = []
     for(const [_, photos] of photosList) {
-      for(const photo of photos) {
+      for(const candidate of photos) {
+        const { photo } = candidate
         if(photo.status === 'done') {
           if(
             photoQuota.remainingCount > 0
-              && photoQuota.remainingSize >= photo.data.length
+              && photoQuota.remainingSize >= candidate.byteLength
           ) {
             photoQuota.remainingCount--
-            photoQuota.remainingSize -= photo.data.length
+            photoQuota.remainingSize -= candidate.byteLength
+            selectedPhotos.push(candidate)
           }
           else {
             photo.status = 'not-available'
-            photo.data = Buffer.from([])
+            photo.data = emptyBuffer
           }
         }
+      }
+    }
+
+    const photoIdsToLoad = [
+      ...new Set(selectedPhotos.flatMap(it => {
+        if(it.source.type !== 'photo') return []
+        return [it.source.fileUniqueId]
+      })),
+    ]
+    const imageKeysToLoad = [
+      ...new Set(selectedPhotos.flatMap(it => {
+        if(it.source.type !== 'image') return []
+        return [it.source.key]
+      })),
+    ]
+
+    const [photoBytesById, imageBytesByKey] = await U.all([
+      (async() => {
+        const photoBytesById = new Map<string, { bytes: Buffer }>()
+        if(photoIdsToLoad.length > 0) {
+          const t = Db.t.photos
+          const photoBytes = await Db.query(conn,
+            'select', [t.fileUniqueId, t.bytes],
+            'from', t,
+            'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
+            'and', Db.inArr(t.fileUniqueId, photoIdsToLoad),
+            'and', Db.eq(t.status, Db.param('done' as const)),
+          )
+          for(const row of photoBytes) photoBytesById.set(row.fileUniqueId, row)
+        }
+        return photoBytesById
+      })(),
+      (async() => {
+        const imageBytesByKey = new Map<string, { bytes: Buffer }>()
+        if(imageKeysToLoad.length > 0) {
+          const t = Db.t.images
+          const imageBytes = await Db.query(conn,
+            'select', [t.key, t.bytes],
+            'from', t,
+            'where', Db.inArr(t.key, imageKeysToLoad),
+            'and', Db.eq(t.status, Db.param('done' as const)),
+          )
+          for(const row of imageBytes) imageBytesByKey.set(row.key, row)
+        }
+        return imageBytesByKey
+      })(),
+    ])
+
+    for(const candidate of selectedPhotos) {
+      const bytes = (() => {
+        if(candidate.source.type === 'photo') {
+            return photoBytesById.get(candidate.source.fileUniqueId)?.bytes
+        }
+        else if(candidate.source.type === 'image') {
+          return imageBytesByKey.get(candidate.source.key)?.bytes
+        }
+      })()
+
+      if(bytes === undefined) {
+        candidate.photo.status = 'not-available'
+        candidate.photo.data = emptyBuffer
+      }
+      else {
+        candidate.photo.data = bytes
       }
     }
   }
@@ -2784,3 +2897,5 @@ export async function getNotes(db: Db.DbConnOrPool, chatId: number) {
     'where', Db.eq(Db.t.chatNotes.id, Db.param(BigInt(chatId))),
   ).then(it => it.at(0)?.notes ?? [])
 }
+
+const emptyBuffer: Buffer = Buffer.from([])
