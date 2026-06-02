@@ -1276,7 +1276,7 @@ export type OpenRouterResponse = OpenRouter['chat']['send'] extends {
 type Photo = {
   file_unique_id: string
   status: 'done' | 'downloading' | 'error' | 'not-available'
-  data: Buffer
+  dataUrl: string | undefined
   info: Types.PhotoSize
 }
 type Video = {
@@ -1309,7 +1309,7 @@ type MessageWithAttachments = {
     title: string
     type: string
     image: {
-      data: Buffer
+      dataUrl: string | undefined
       status: 'done' | 'downloading' | 'error' | 'not-available'
     } | undefined
   }[]
@@ -1371,7 +1371,7 @@ export async function fetchMessages(
           {
             file_unique_id: photo.file_unique_id,
             status: 'not-available',
-            data: emptyBuffer,
+            dataUrl: undefined,
             info: photo,
           }
         ]
@@ -1388,7 +1388,7 @@ export async function fetchMessages(
             return {
               file_unique_id: photo.file_unique_id,
               status: 'not-available',
-              data: emptyBuffer,
+              dataUrl: undefined,
               info: photo,
             }
           })(),
@@ -1406,7 +1406,7 @@ export async function fetchMessages(
             return {
               file_unique_id: photo.file_unique_id,
               status: 'not-available',
-              data: emptyBuffer,
+              dataUrl: undefined,
               info: photo,
             }
           })(),
@@ -1424,7 +1424,7 @@ export async function fetchMessages(
             return {
               file_unique_id: photo.file_unique_id,
               status: 'not-available',
-              data: emptyBuffer,
+              dataUrl: undefined,
               info: photo,
             }
           })(),
@@ -1435,7 +1435,7 @@ export async function fetchMessages(
   })
 
   type PhotoStatus = 'done' | 'downloading' | 'error' | 'not-available'
-  type PhotoSubset = { status: PhotoStatus, data: Buffer }
+  type PhotoSubset = { status: PhotoStatus, dataUrl: string | undefined }
   type PhotoQuotaCandidate = {
     photo: PhotoSubset
     byteLength: number
@@ -1596,14 +1596,14 @@ export async function fetchMessages(
           return {
             key,
             byteLength: 0,
-            photo: { data: emptyBuffer, status: 'not-available' as const },
+            photo: { dataUrl: undefined, status: 'not-available' as const },
           }
         }
 
         return {
           key,
           byteLength: image.byteLength,
-          photo: { data: emptyBuffer, status: image.status },
+          photo: { dataUrl: undefined, status: image.status },
         }
       })()
       const photo = imageInfo?.photo
@@ -1641,7 +1641,7 @@ export async function fetchMessages(
           }
           else {
             photo.status = 'not-available'
-            photo.data = emptyBuffer
+            photo.dataUrl = undefined
           }
         }
       }
@@ -1660,9 +1660,9 @@ export async function fetchMessages(
       })),
     ]
 
-    const [photoBytesById, imageBytesByKey] = await U.all([
+    const [photoDataUrlsById, imageDataUrlsByKey] = await U.all([
       (async() => {
-        const photoBytesById = new Map<string, { bytes: Buffer }>()
+        const photoDataUrlsById = new Map<string, string>()
         if(photoIdsToLoad.length > 0) {
           const t = Db.t.photos
           const photoBytes = await Db.query(conn,
@@ -1672,12 +1672,15 @@ export async function fetchMessages(
             'and', Db.inArr(t.fileUniqueId, photoIdsToLoad),
             'and', Db.eq(t.status, Db.param('done' as const)),
           )
-          for(const row of photoBytes) photoBytesById.set(row.fileUniqueId, row)
+          for(const row of photoBytes) {
+            const dataUrl = await bytesToDataUrl(log, row.bytes)
+            if(dataUrl !== undefined) photoDataUrlsById.set(row.fileUniqueId, dataUrl)
+          }
         }
-        return photoBytesById
+        return photoDataUrlsById
       })(),
       (async() => {
-        const imageBytesByKey = new Map<string, { bytes: Buffer }>()
+        const imageDataUrlsByKey = new Map<string, string>()
         if(imageKeysToLoad.length > 0) {
           const t = Db.t.images
           const imageBytes = await Db.query(conn,
@@ -1686,28 +1689,31 @@ export async function fetchMessages(
             'where', Db.inArr(t.key, imageKeysToLoad),
             'and', Db.eq(t.status, Db.param('done' as const)),
           )
-          for(const row of imageBytes) imageBytesByKey.set(row.key, row)
+          for(const row of imageBytes) {
+            const dataUrl = await bytesToDataUrl(log, row.bytes)
+            if(dataUrl !== undefined) imageDataUrlsByKey.set(row.key, dataUrl)
+          }
         }
-        return imageBytesByKey
+        return imageDataUrlsByKey
       })(),
     ])
 
     for(const candidate of selectedPhotos) {
-      const bytes = (() => {
+      const dataUrl = (() => {
         if(candidate.source.type === 'photo') {
-            return photoBytesById.get(candidate.source.fileUniqueId)?.bytes
+          return photoDataUrlsById.get(candidate.source.fileUniqueId)
         }
         else if(candidate.source.type === 'image') {
-          return imageBytesByKey.get(candidate.source.key)?.bytes
+          return imageDataUrlsByKey.get(candidate.source.key)
         }
       })()
 
-      if(bytes === undefined) {
+      if(dataUrl === undefined) {
         candidate.photo.status = 'not-available'
-        candidate.photo.data = emptyBuffer
+        candidate.photo.dataUrl = undefined
       }
       else {
-        candidate.photo.data = bytes
+        candidate.photo.dataUrl = dataUrl
       }
     }
   }
@@ -2001,24 +2007,17 @@ export async function messagesToModelInput(
 }
 
 async function photoToMessagePart(
-  log: L.Log,
-  photo: { data: Buffer, status: string },
+  _log: L.Log,
+  photo: { dataUrl: string | undefined, status: string },
   fallback: string,
 ) {
-  if(photo.status === 'done') {
-    const type = await new FileTypeParser().fromBuffer(photo.data)
-    if(type !== undefined) {
-      const dataUrl = `data:${type.mime};base64,${photo.data.toString("base64")}`;
-      return {
-        type: 'image_url' as const,
-        imageUrl: {
-          url: dataUrl,
-          detail: 'auto' as const,
-        },
-      }
-    }
-    else {
-      log.W('Could not detect file type for image')
+  if(photo.status === 'done' && photo.dataUrl !== undefined) {
+    return {
+      type: 'image_url' as const,
+      imageUrl: {
+        url: photo.dataUrl,
+        detail: 'auto' as const,
+      },
     }
   }
 
@@ -2027,6 +2026,16 @@ async function photoToMessagePart(
     text: fallback,
   }
 
+}
+
+async function bytesToDataUrl(log: L.Log, bytes: Buffer) {
+  const type = await new FileTypeParser().fromBuffer(bytes)
+  if(type === undefined) {
+    log.W('Could not detect file type for image')
+    return undefined
+  }
+
+  return `data:${type.mime};base64,${bytes.toString("base64")}`
 }
 
 export async function sendMessageOrPhoto(
