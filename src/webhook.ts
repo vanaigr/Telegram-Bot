@@ -154,9 +154,11 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
   const whitelistInfo = await getChatWhitelistInfo(pool, log, message.chat.id)
   if(whitelistInfo === undefined) return new Response()
 
+  const messageText = message.text || message.caption || ''
+
   if(!edit) {
     // NOTE: also for edits. Is that good?
-    if(message.text?.startsWith('/start')) {
+    if(messageText.startsWith('/start')) {
       log.I('Received start command')
 
       const t = Db.t.chatWhitelist
@@ -170,7 +172,7 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
 
       return new Response()
     }
-    else if(message.text?.startsWith('/stop')) {
+    else if(messageText.startsWith('/stop')) {
       log.I('Received stop command')
 
       const t = Db.t.chatWhitelist
@@ -184,14 +186,14 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
 
       return new Response()
     }
-    else if(message.text?.startsWith('/whisper')) {
+    else if(messageText.startsWith('/whisper')) {
       log.I('Ignoring since /whisper')
 
       await Logic.setMessageReaction(message.chat.id, message.message_id, '🙉', log)
 
       return new Response()
     }
-    else if(message.text?.startsWith('/notes')) {
+    else if(messageText.startsWith('/notes')) {
       log.I('Requested notes')
 
       const notes = await Logic.getNotes(pool, message.chat.id)
