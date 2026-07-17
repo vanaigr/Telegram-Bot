@@ -1296,14 +1296,13 @@ type Sticker = {
   thumbnail: Photo | undefined
 }
 
-type MessageWithAttachments = {
+type BaseMessageWithAttachments = {
   msg: Types.Message
-  reactions: Reaction[]
+  replyToMessage: ReplyMessageWithAttachments | undefined
   photos: Photo[]
   video: Video | undefined
   videoNote: VideoNote | undefined
   stickers: Sticker[]
-  generation: OpenRouterMessage[]
   linkInfos: {
     url: string
     title: string
@@ -1315,12 +1314,23 @@ type MessageWithAttachments = {
   }[]
 }
 
+type RootMessageWithAttachments = BaseMessageWithAttachments & {
+  type: 'root'
+  generation: OpenRouterMessage[]
+  reactions: Reaction[]
+}
+type ReplyMessageWithAttachments = BaseMessageWithAttachments & {
+  type: 'reply'
+}
+
+type AnyMessageWithAttachments = RootMessageWithAttachments | ReplyMessageWithAttachments
+
 export async function fetchMessages(
   conn: Db.DbConnOrPool,
   log: L.Log,
   chatId: number,
-  ctx?: { lastMessage?: number, skipImages?: boolean, skipLinks?: boolean }
-): Promise<MessageWithAttachments[]> {
+  ctx?: { lastMessage?: number/*, skipImages?: boolean, skipLinks?: boolean*/ }
+): Promise<RootMessageWithAttachments[]> {
   const t = Db.t.messages
   const messagesRaw = await Db.query(conn,
     'select', [
@@ -1353,9 +1363,10 @@ export async function fetchMessages(
     return []
   }
 
-  const messages = messagesRaw.map(({ raw: msg, generation, reactions }): MessageWithAttachments => {
+  const messages = messagesRaw.map(({ raw: msg, generation, reactions }): RootMessageWithAttachments => {
     return {
-      msg,
+      ...dbMessageToMessageWithAttachments(msg, true),
+      type: 'root',
       generation: generation as OpenRouterMessage[],
       reactions: (reactions ?? []).map((it: any) => {
         return {
@@ -1363,74 +1374,6 @@ export async function fetchMessages(
           reason: it.reason as string,
         }
       }),
-      photos: ((): Photo[] => {
-        const photo = msg.photo?.at(-1)
-        if(!photo) return []
-
-        return [
-          {
-            file_unique_id: photo.file_unique_id,
-            status: 'not-available',
-            dataUrl: undefined,
-            info: photo,
-          }
-        ]
-      })(),
-      video: ((): Video | undefined => {
-        const video = msg.video
-        if(!video) return undefined
-
-        return {
-          info: video,
-          thumbnail: (() => {
-            const photo = video.thumbnail
-            if(!photo) return undefined
-            return {
-              file_unique_id: photo.file_unique_id,
-              status: 'not-available',
-              dataUrl: undefined,
-              info: photo,
-            }
-          })(),
-        }
-      })(),
-      videoNote: ((): VideoNote | undefined => {
-        const videoNote = msg.video_note
-        if(!videoNote) return undefined
-
-        return {
-          info: videoNote,
-          thumbnail: (() => {
-            const photo = videoNote.thumbnail
-            if(!photo) return undefined
-            return {
-              file_unique_id: photo.file_unique_id,
-              status: 'not-available',
-              dataUrl: undefined,
-              info: photo,
-            }
-          })(),
-        }
-      })(),
-      stickers: ((): Sticker[] => {
-        const sticker = msg.sticker
-        if(!sticker) return []
-
-        return [{
-          emoji: sticker.emoji,
-          thumbnail: (() => {
-            const photo = sticker.thumbnail
-            if(!photo) return undefined
-            return {
-              file_unique_id: photo.file_unique_id,
-              status: 'not-available',
-              dataUrl: undefined,
-              info: photo,
-            }
-          })(),
-        }]
-      })(),
-      linkInfos: [],
     }
   })
 
@@ -1443,188 +1386,212 @@ export async function fetchMessages(
       | { type: 'photo', fileUniqueId: string }
       | { type: 'image', key: string }
   }
-  const photosByMessage = new Map<number, PhotoQuotaCandidate[]>()
+  const photosByOrder = new Map<number, PhotoQuotaCandidate[]>()
   const addQuotaCandidate = (
-    message: MessageWithAttachments,
+    order: number,
     photo: PhotoSubset,
     byteLength: number,
     source: PhotoQuotaCandidate['source'],
   ) => {
-    const key = message.msg.message_id
-    let arr = photosByMessage.get(key)
+    let arr = photosByOrder.get(order)
     if(arr === undefined) {
       arr = []
-      photosByMessage.set(key, arr)
+      photosByOrder.set(order, arr)
     }
     arr.push({ photo, byteLength, source })
   }
 
-  if(ctx?.skipImages !== true) {
-    // Insertion order is from latest to earliest.
-    const fileUniqueIds = new Set<string>()
-    for(let off = 0; off < Math.min(10, messages.length); off++) {
-      const message = messages[messages.length - 1 - off]
-
-      const { photos, video, videoNote, stickers } = message
-      for(let j = photos.length - 1; j > -1; j--) {
-        fileUniqueIds.add(photos[j].file_unique_id)
-      }
-      if(video?.thumbnail) fileUniqueIds.add(video.thumbnail.file_unique_id)
-      if(videoNote?.thumbnail) fileUniqueIds.add(videoNote.thumbnail.file_unique_id)
-      for(const it of stickers) {
-        const id = it.thumbnail?.file_unique_id
-        if(id) fileUniqueIds.add(id)
-      }
-    }
-
-    const t = Db.t.photos
-    const arrayP = Db.param([...fileUniqueIds])
-    const photoRows = await Db.query(conn,
-      'select', [
-        t.status,
-        t.fileUniqueId,
-        Db.named(
-          'byteLength',
-          Db.func<typeof Db.dbTypes.integer>('octet_length', t.bytes),
-        ),
-      ],
-      'from', t,
-      'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
-      'and', t.fileUniqueId, '=', Db.func('any', arrayP),
-      'and', Db.eq(t.status, Db.param('done' as const)),
-      'order by', Db.func('array_position', arrayP, t.fileUniqueId),
-    )
-    const photoRowsById = new Map(photoRows.map(it => [it.fileUniqueId, it]))
-
-    for(const message of messages) {
-      for(const photo of message.photos) {
-        const photoRow = photoRowsById.get(photo.file_unique_id)
-        if(photoRow !== undefined) {
-          photo.status = photoRow.status
-          addQuotaCandidate(message, photo, photoRow.byteLength, {
-            type: 'photo',
-            fileUniqueId: photo.file_unique_id,
-          })
+  const [photoRowsById, { linkInfosMap, imagesMap }] = await U.all([
+    (async() => {
+      const fileUniqueIds = new Set<string>()
+      const addMessage = (message: AnyMessageWithAttachments) => {
+        const { photos, video, videoNote, stickers } = message
+        for(let j = photos.length - 1; j > -1; j--) {
+          fileUniqueIds.add(photos[j].file_unique_id)
+        }
+        if(video?.thumbnail) fileUniqueIds.add(video.thumbnail.file_unique_id)
+        if(videoNote?.thumbnail) fileUniqueIds.add(videoNote.thumbnail.file_unique_id)
+        for(const it of stickers) {
+          const id = it.thumbnail?.file_unique_id
+          if(id) fileUniqueIds.add(id)
         }
       }
-      if(message.video?.thumbnail) {
-        const photo = message.video.thumbnail
-        const photoRow = photoRowsById.get(photo.file_unique_id)
-        if(photoRow !== undefined) {
-          photo.status = photoRow.status
-          addQuotaCandidate(message, photo, photoRow.byteLength, {
-            type: 'photo',
-            fileUniqueId: photo.file_unique_id,
-          })
-        }
+      // Insertion order is from latest to earliest.
+      for(let off = 0; off < Math.min(10, messages.length); off++) {
+        const message = messages[messages.length - 1 - off]
+        addMessage(message)
+        if(message.replyToMessage !== undefined) addMessage(message.replyToMessage)
       }
-      if(message.videoNote?.thumbnail) {
-        const photo = message.videoNote.thumbnail
-        if(!photo) continue
-        const photoRow = photoRowsById.get(photo.file_unique_id)
-        if(photoRow !== undefined) {
-          photo.status = photoRow.status
-          addQuotaCandidate(message, photo, photoRow.byteLength, {
-            type: 'photo',
-            fileUniqueId: photo.file_unique_id,
-          })
+
+      const t = Db.t.photos
+      const arrayP = Db.param([...fileUniqueIds])
+      const photoRows = await Db.query(conn,
+        'select', [
+          t.status,
+          t.fileUniqueId,
+          Db.named(
+            'byteLength',
+            Db.func<typeof Db.dbTypes.integer>('octet_length', t.bytes),
+          ),
+        ],
+        'from', t,
+        'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
+        'and', t.fileUniqueId, '=', Db.func('any', arrayP),
+        'and', Db.eq(t.status, Db.param('done' as const)),
+        'order by', Db.func('array_position', arrayP, t.fileUniqueId),
+      )
+      const photoRowsById = new Map(photoRows.map(it => [it.fileUniqueId, it]))
+
+      return photoRowsById
+    })(),
+    (async() => {
+      const urls = new Set<string>()
+      for(const { msg, replyToMessage } of messages) {
+        const url = msg.link_preview_options?.url
+        if(url) urls.add(url)
+
+        if(replyToMessage !== undefined) {
+          const url = replyToMessage.msg.link_preview_options?.url
+          if(url) urls.add(url)
         }
       }
 
-      for(const it of message.stickers) {
-        const photo = it.thumbnail
-        if(!photo) continue
-        const photoRow = photoRowsById.get(photo.file_unique_id)
-        if(photoRow !== undefined) {
-          photo.status = photoRow.status
-          addQuotaCandidate(message, photo, photoRow.byteLength, {
-            type: 'photo',
-            fileUniqueId: photo.file_unique_id,
-          })
-        }
+      const { images, linkInfo } = Db.t
+      const linkInfosList = await Db.query(conn,
+        'select', [linkInfo.url, linkInfo.title, linkInfo.type, linkInfo.image],
+        'from', linkInfo,
+        'where', Db.inArr(linkInfo.url, [...urls]),
+      )
+      const linkInfosMap = new Map(linkInfosList.map(it => [it.url, it]))
+
+      const imageKeys = new Set<string>()
+      for(const linkInfo of linkInfosMap.values()) {
+        if(linkInfo.image === null) continue
+        imageKeys.add(U.getHash('url', linkInfo.image))
       }
-    }
-  }
+      const imagesList = await Db.query(conn,
+        'select', [
+          images.key,
+          images.status,
+          Db.named(
+            'byteLength',
+            Db.func<typeof Db.dbTypes.integer>('octet_length', images.bytes),
+          ),
+        ],
+        'from', images,
+        'where', Db.inArr(images.key, [...imageKeys]),
+      )
+      const imagesMap = new Map(imagesList.map(it => [it.key, it]))
 
-  if(ctx?.skipLinks !== true) {
-    const urls = new Set<string>()
-    for(const { msg } of messages) {
-      const url = msg.link_preview_options?.url
-      if(url) urls.add(url)
-    }
+      return { linkInfosMap, imagesMap }
+    })(),
+  ])
 
-    const { images, linkInfo } = Db.t
-    const linkInfosList = await Db.query(conn,
-      'select', [linkInfo.url, linkInfo.title, linkInfo.type, linkInfo.image],
-      'from', linkInfo,
-      'where', Db.inArr(linkInfo.url, [...urls]),
-    )
-    const linkInfosMap = new Map(linkInfosList.map(it => [it.url, it]))
-
-    const imageKeys = new Set<string>()
-    for(const linkInfo of linkInfosMap.values()) {
-      if(linkInfo.image === null) continue
-      imageKeys.add(U.getHash('url', linkInfo.image))
-    }
-    const imagesList = await Db.query(conn,
-      'select', [
-        images.key,
-        images.status,
-        Db.named(
-          'byteLength',
-          Db.func<typeof Db.dbTypes.integer>('octet_length', images.bytes),
-        ),
-      ],
-      'from', images,
-      'where', Db.inArr(images.key, [...imageKeys]),
-    )
-    const imagesMap = new Map(imagesList.map(it => [it.key, it]))
-
-    for(const message of messages) {
-      const url = message.msg.link_preview_options?.url
-      if(!url) continue
-
-      const linkInfo = linkInfosMap.get(url ?? '')
-      if(linkInfo === undefined) continue
-
-      const imageInfo = (() => {
-        const url = linkInfo.image
-        if(url === null) return undefined
-        const key = U.getHash('url', url)
-        const image = imagesMap.get(key)
-        if(image === undefined) {
-          return {
-            key,
-            byteLength: 0,
-            photo: { dataUrl: undefined, status: 'not-available' as const },
-          }
-        }
-
-        return {
-          key,
-          byteLength: image.byteLength,
-          photo: { dataUrl: undefined, status: image.status },
-        }
-      })()
-      const photo = imageInfo?.photo
-      if(photo?.status === 'done' && imageInfo !== undefined) {
-        addQuotaCandidate(message, photo, imageInfo.byteLength, {
-          type: 'image',
-          key: imageInfo.key,
+  const processMessageImageAttachments = (message: AnyMessageWithAttachments, order: number) => {
+    for(const photo of message.photos) {
+      const photoRow = photoRowsById.get(photo.file_unique_id)
+      if(photoRow !== undefined) {
+        photo.status = photoRow.status
+        addQuotaCandidate(order, photo, photoRow.byteLength, {
+          type: 'photo',
+          fileUniqueId: photo.file_unique_id,
         })
       }
+    }
 
-      message.linkInfos.push({
-        url: linkInfo.url,
-        title: linkInfo.title ?? 'N/A',
-        type: linkInfo.type ?? 'N/A',
-        image: photo,
-      })
+    if(message.video?.thumbnail) {
+      const photo = message.video.thumbnail
+      const photoRow = photoRowsById.get(photo.file_unique_id)
+      if(photoRow !== undefined) {
+        photo.status = photoRow.status
+        addQuotaCandidate(order, photo, photoRow.byteLength, {
+          type: 'photo',
+          fileUniqueId: photo.file_unique_id,
+        })
+      }
+    }
+
+    if(message.videoNote?.thumbnail) {
+      const photo = message.videoNote.thumbnail
+      if(photo) {
+        const photoRow = photoRowsById.get(photo.file_unique_id)
+        if(photoRow !== undefined) {
+          photo.status = photoRow.status
+          addQuotaCandidate(order, photo, photoRow.byteLength, {
+            type: 'photo',
+            fileUniqueId: photo.file_unique_id,
+          })
+        }
+      }
+    }
+
+    for(const it of message.stickers) {
+      const photo = it.thumbnail
+      if(!photo) continue
+      const photoRow = photoRowsById.get(photo.file_unique_id)
+      if(photoRow !== undefined) {
+        photo.status = photoRow.status
+        addQuotaCandidate(order, photo, photoRow.byteLength, {
+          type: 'photo',
+          fileUniqueId: photo.file_unique_id,
+        })
+      }
+    }
+
+    const url = message.msg.link_preview_options?.url
+    if(url) {
+      const linkInfo = linkInfosMap.get(url ?? '')
+      if(linkInfo !== undefined) {
+        const imageInfo = (() => {
+          const url = linkInfo.image
+          if(url === null) return undefined
+          const key = U.getHash('url', url)
+          const image = imagesMap.get(key)
+          if(image === undefined) {
+            return {
+              key,
+              byteLength: 0,
+              photo: { dataUrl: undefined, status: 'not-available' as const },
+            }
+          }
+
+          return {
+            key,
+            byteLength: image.byteLength,
+            photo: { dataUrl: undefined, status: image.status },
+          }
+        })()
+        const photo = imageInfo?.photo
+        if(photo?.status === 'done' && imageInfo !== undefined) {
+          addQuotaCandidate(order, photo, imageInfo.byteLength, {
+            type: 'image',
+            key: imageInfo.key,
+          })
+        }
+
+        message.linkInfos.push({
+          url: linkInfo.url,
+          title: linkInfo.title ?? 'N/A',
+          type: linkInfo.type ?? 'N/A',
+          image: photo,
+        })
+      }
     }
   }
 
-{
-    const photosList = [...photosByMessage].sort((a, b) => -(a[0] - b[0]))
+  for(const message of messages) {
+    processMessageImageAttachments(message, message.msg.message_id)
+    // NOTE: this goes after the main message since quota goes from earliest image inside
+    // a message to latest. So this has less chance of loading.
+    // But we use parent message id so that if the parent is newer, reply images
+    // have priority over previous messages.
+    if(message.replyToMessage !== undefined) {
+      processMessageImageAttachments(message.replyToMessage, message.msg.message_id)
+    }
+  }
+
+  {
+    const photosList = [...photosByOrder].sort((a, b) => -(a[0] - b[0]))
     const photoQuota = { remainingCount: 5, remainingSize: 5_000_000 }
     const selectedPhotos: PhotoQuotaCandidate[] = []
     for(const [_, photos] of photosList) {
@@ -1721,6 +1688,81 @@ export async function fetchMessages(
   return messages
 }
 
+function dbMessageToMessageWithAttachments(msg: Types.Message, root: boolean): BaseMessageWithAttachments {
+  return {
+    msg,
+    replyToMessage: root && msg.reply_to_message ? { ...dbMessageToMessageWithAttachments(msg.reply_to_message, false), type: 'reply' } : undefined,
+    photos: ((): Photo[] => {
+      const photo = msg.photo?.at(-1)
+      if(!photo) return []
+
+      return [
+        {
+          file_unique_id: photo.file_unique_id,
+          status: 'not-available',
+          dataUrl: undefined,
+          info: photo,
+        }
+      ]
+    })(),
+    video: ((): Video | undefined => {
+      const video = msg.video
+      if(!video) return undefined
+
+      return {
+        info: video,
+        thumbnail: (() => {
+          const photo = video.thumbnail
+          if(!photo) return undefined
+          return {
+            file_unique_id: photo.file_unique_id,
+            status: 'not-available',
+            dataUrl: undefined,
+            info: photo,
+          }
+        })(),
+      }
+    })(),
+    videoNote: ((): VideoNote | undefined => {
+      const videoNote = msg.video_note
+      if(!videoNote) return undefined
+
+      return {
+        info: videoNote,
+        thumbnail: (() => {
+          const photo = videoNote.thumbnail
+          if(!photo) return undefined
+          return {
+            file_unique_id: photo.file_unique_id,
+            status: 'not-available',
+            dataUrl: undefined,
+            info: photo,
+          }
+        })(),
+      }
+    })(),
+    stickers: ((): Sticker[] => {
+      const sticker = msg.sticker
+      if(!sticker) return []
+
+      return [{
+        emoji: sticker.emoji,
+        thumbnail: (() => {
+          const photo = sticker.thumbnail
+          if(!photo) return undefined
+          return {
+            file_unique_id: photo.file_unique_id,
+            status: 'not-available',
+            dataUrl: undefined,
+            info: photo,
+          }
+        })(),
+      }]
+    })(),
+    linkInfos: [],
+  }
+}
+
 /*
 type LlmMessage = {
   role: 'user'
@@ -1748,7 +1790,7 @@ export async function messagesToModelInput(
   }: {
     //summaries: string[],
     notes: string[],
-    messages: MessageWithAttachments[],
+    messages: AnyMessageWithAttachments[],
     chatInfo: Types.ChatFullInfo | undefined,
     log: L.Log
     caching: boolean
@@ -1804,174 +1846,7 @@ export async function messagesToModelInput(
   )
 
   for(const message of messageSubset) {
-    const { msg, photos, video, videoNote, stickers, reactions, linkInfos } = message
-    if(msg.new_chat_title !== undefined) {
-      openrouterMessages.push({
-        role: 'user',
-        content: [{
-          type: 'text',
-          text: JSON.stringify({ newChatTitle: msg.new_chat_title }),
-        }],
-      })
-      continue
-    }
-    else if(msg.new_chat_members !== undefined) {
-      openrouterMessages.push({
-        role: 'user',
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            newChatMembers: msg.new_chat_members.map(it => userToString(it, true)),
-          }),
-        }],
-      })
-      continue
-    }
-    else if(msg.left_chat_member !== undefined) {
-      openrouterMessages.push({
-        role: 'user',
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            leftChatMember: userToString(msg.left_chat_member, true),
-          }),
-        }],
-      })
-      continue
-    }
-
-    const metadataObject: OpenRouterMessage = {
-        role: 'system',
-        content: [{
-          type: 'text',
-          text: messageMetadata(msg, reactions),
-        }],
-      }
-
-    if(msg.from?.username === botUsername) {
-      openrouterMessages.push({
-        role: 'assistant',
-        content: [{ type: 'text', text: msg.text ?? '<ERROR: NO TEXT>' }],
-      })
-      openrouterMessages.push(metadataObject)
-      continue
-    }
-
-    let text = ''
-    if(msg.reply_to_message) {
-      const replyText = ''
-        + messageText(msg.reply_to_message, log)
-        + messageMetadata(msg.reply_to_message, undefined)
-
-      text += replyText.split('\n').map(it => '> ' + it).join('\n')
-      text += '\n'
-    }
-    text += messageText(msg, log)
-
-    const content: Extract<OpenRouterMessage, { role: 'user' }>['content'] = []
-    content.push({ type: 'text', text })
-
-    for(const photo of photos) {
-      content.push(await photoToMessagePart(log, photo, '<image not available>'))
-    }
-    if(video) {
-      content.push({
-        type: 'text',
-        text: '<Video '
-          + (video.info.file_name ?? 'no name')
-          + ', '
-          + formatDurationSec(video.info.duration)
-          + ' not available>\nThumbnail: '
-      })
-      if(video.thumbnail) {
-        content.push(await photoToMessagePart(
-          log,
-          video.thumbnail,
-          '<thumbnail not available>',
-        ))
-      }
-    }
-    if(videoNote) {
-      content.push({
-        type: 'text',
-        text: `<Circular video, ${formatDurationSec(videoNote.info.duration)}>\nThumbnail: `
-      })
-      if(videoNote.thumbnail) {
-        content.push(await photoToMessagePart(
-          log,
-          videoNote.thumbnail,
-          '<thumbnail not available>',
-        ))
-      }
-    }
-    if(msg.voice) {
-      content.push({
-        type: 'text' as const,
-        text: `<voice, ${formatDurationSec(msg.voice.duration)} not available>`,
-      })
-    }
-    if(msg.audio) {
-      content.push({
-        type: 'text' as const,
-        text: '<audio, '
-          + (msg.audio.title ?? msg.audio.file_name ?? 'unknown')
-          + ' by '
-          + (msg.audio.performer ?? 'unknown')
-          + ', '
-          + formatDurationSec(msg.audio.duration)
-          + ' not available>',
-      })
-    }
-    if(msg.document) {
-      content.push({
-        type: 'text' as const,
-        text: '<document '
-          + (msg.document.mime_type ?? 'application/octet-stream')
-          + ' '
-          + (msg.document.file_name ?? 'no name')
-          + ' not available>',
-      })
-    }
-    if(msg.location) {
-      content.push({
-        type: 'text' as const,
-        text: `<location lat: ${msg.location.latitude}, lon: ${msg.location.longitude}>`,
-      })
-    }
-    for(const sticker of stickers) {
-      content.push({
-        type: 'text' as const,
-        text: `<sticker ${sticker.emoji ?? 'not available'}>`,
-      })
-      if(sticker.thumbnail?.status === 'done') {
-        content.push(await photoToMessagePart(
-          log,
-          sticker.thumbnail,
-          '<sticker image not available>',
-        ))
-
-      }
-    }
-    for(const linkInfo of linkInfos) {
-      content.push({
-        type: 'text' as const,
-        text: `<url ${linkInfo.url}: "${linkInfo.title}">`
-      })
-      if(linkInfo.image) {
-        content.push(await photoToMessagePart(
-          log,
-          linkInfo.image,
-          '<thumbnail not available>',
-        ))
-      }
-    }
-
-    openrouterMessages.push({ role: 'user', content })
-    openrouterMessages.push(metadataObject)
-
-    for(const msg of message.generation) {
-      openrouterMessages.push(msg)
-    }
+    await messageToModelInput(message, openrouterMessages, log)
   }
 
   ;(() => {
@@ -2004,6 +1879,216 @@ export async function messagesToModelInput(
   })()
 
   return openrouterMessages
+}
+
+async function messageToModelInput(
+  message: AnyMessageWithAttachments,
+  _output: OpenRouterMessage[],
+  log: L.Log,
+) {
+  const { msg, photos, video, videoNote, stickers/*, reactions*/, linkInfos } = message
+  const reactions = message.type === 'root' ? message.reactions : []
+
+  type ChatContentText = {
+    type: 'text'
+    text: string
+  }
+  type ChatContentImage = {
+    type: 'image_url'
+    imageUrl: { url: string }
+  };
+  type ChatContentItems = ChatContentText | ChatContentImage
+  type AllowedMessage = { role: 'assistant', content: ChatContentItems[] }
+    | { role: 'user', content: ChatContentItems[] }
+    | { role: 'system', content: ChatContentText[] }
+
+
+  const addContent = (content: AllowedMessage) => _output.push(content)
+
+  if(msg.new_chat_title !== undefined) {
+    addContent({
+      role: 'user',
+      content: [{
+        type: 'text',
+        text: JSON.stringify({ newChatTitle: msg.new_chat_title }),
+      }],
+    })
+    return
+  }
+  else if(msg.new_chat_members !== undefined) {
+    addContent({
+      role: 'user',
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          newChatMembers: msg.new_chat_members.map(it => userToString(it, true)),
+        }),
+      }],
+    })
+    return
+  }
+  else if(msg.left_chat_member !== undefined) {
+    addContent({
+      role: 'user',
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          leftChatMember: userToString(msg.left_chat_member, true),
+        }),
+      }],
+    })
+    return
+  }
+
+  const metadataObject: AllowedMessage = {
+    role: 'system',
+    content: [{
+      type: 'text',
+      text: messageMetadata(msg, reactions),
+    }],
+  }
+
+  // TODO: do we even have these? We should only be storing messages in `generation`.
+  if(message.type === 'root' && msg.from?.username === botUsername) {
+    addContent({
+      role: 'assistant',
+      content: [{ type: 'text', text: msg.text ?? '<ERROR: NO TEXT>' }],
+    })
+    addContent(metadataObject)
+    return
+  }
+
+  if(message.replyToMessage !== undefined) {
+    addContent({ role: 'user', content: [{ type: 'text', text: '> ' }] })
+
+    const endI = _output.length
+    await messageToModelInput(message.replyToMessage, _output, log)
+
+    const addIndent = (text: string) => text.split('\n').map((it, i) => (i !== 0 ? '> ' : '') + it).join('\n')
+
+    for(let i = endI; i < _output.length; i++) {
+      const part = _output[i]
+      if(typeof part.content === 'string') {
+        part.content = addIndent(part.content)
+      }
+      else {
+        for(const item of part.content as ChatContentItems[]) {
+          if(item.type === 'text') {
+            item.text = addIndent(item.text)
+          }
+        }
+      }
+    }
+
+    addContent({ role: 'user', content: [{ type: 'text', text: '\n' }] })
+  }
+
+  const content: ChatContentItems[] = []
+  content.push({ type: 'text', text: messageText(msg, log) })
+
+  for(const photo of photos) {
+    content.push(await photoToMessagePart(log, photo, '<image not available>'))
+  }
+  if(video) {
+    content.push({
+      type: 'text',
+      text: '<Video '
+        + (video.info.file_name ?? 'no name')
+        + ', '
+        + formatDurationSec(video.info.duration)
+        + ' not available>\nThumbnail: '
+    })
+    if(video.thumbnail) {
+      content.push(await photoToMessagePart(
+        log,
+        video.thumbnail,
+        '<thumbnail not available>',
+      ))
+    }
+  }
+  if(videoNote) {
+    content.push({
+      type: 'text',
+      text: `<Circular video, ${formatDurationSec(videoNote.info.duration)}>\nThumbnail: `
+    })
+    if(videoNote.thumbnail) {
+      content.push(await photoToMessagePart(
+        log,
+        videoNote.thumbnail,
+        '<thumbnail not available>',
+      ))
+    }
+  }
+  if(msg.voice) {
+    content.push({
+      type: 'text' as const,
+      text: `<voice, ${formatDurationSec(msg.voice.duration)} not available>`,
+    })
+  }
+  if(msg.audio) {
+    content.push({
+      type: 'text' as const,
+      text: '<audio, '
+        + (msg.audio.title ?? msg.audio.file_name ?? 'unknown')
+        + ' by '
+        + (msg.audio.performer ?? 'unknown')
+        + ', '
+        + formatDurationSec(msg.audio.duration)
+        + ' not available>',
+    })
+  }
+  if(msg.document) {
+    content.push({
+      type: 'text' as const,
+      text: '<document '
+        + (msg.document.mime_type ?? 'application/octet-stream')
+        + ' '
+        + (msg.document.file_name ?? 'no name')
+        + ' not available>',
+    })
+  }
+  if(msg.location) {
+    content.push({
+      type: 'text' as const,
+      text: `<location lat: ${msg.location.latitude}, lon: ${msg.location.longitude}>`,
+    })
+  }
+  for(const sticker of stickers) {
+    content.push({
+      type: 'text' as const,
+      text: `<sticker ${sticker.emoji ?? 'not available'}>`,
+    })
+    if(sticker.thumbnail?.status === 'done') {
+      content.push(await photoToMessagePart(
+        log,
+        sticker.thumbnail,
+        '<sticker image not available>',
+      ))
+
+    }
+  }
+  for(const linkInfo of linkInfos) {
+    content.push({
+      type: 'text' as const,
+      text: `<url ${linkInfo.url}: "${linkInfo.title}">`
+    })
+    if(linkInfo.image) {
+      content.push(await photoToMessagePart(
+        log,
+        linkInfo.image,
+        '<thumbnail not available>',
+      ))
+    }
+  }
+
+  addContent({ role: 'user', content })
+  addContent(metadataObject)
+
+  if(message.type === 'root') {
+    for(const msg of message.generation) {
+      _output.push(msg)
+    }
+  }
 }
 
 async function photoToMessagePart(
