@@ -636,7 +636,7 @@ export async function reply(
     messages,
     chatInfo: await chatInfoP,
     log,
-    caching: false,
+    caching: true,
   })
   /*
   if(Math.random() < 0.7) {
