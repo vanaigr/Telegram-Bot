@@ -1296,8 +1296,6 @@ type Sticker = {
   thumbnail: Photo | undefined
 }
 
-type MessageFrom = 'user' | 'assistant'
-
 type BaseMessageWithAttachments = {
   msg: Types.Message
   replyToMessage: ReplyMessageWithAttachments | undefined
@@ -1378,6 +1376,32 @@ export async function fetchMessages(
     }
   })
 
+  const messagesIndexFromEnd = (() => {
+    const result = Array<number>(messages.length)
+
+    const mediaGroupIdToMessageIndex = new Map<string, number>()
+    let indexFromEndEnd = 0
+    for(let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i]
+
+      let indexFromEnd: number | undefined
+      if(message.msg.media_group_id === undefined) {
+        indexFromEnd = indexFromEndEnd++
+      }
+      else {
+        indexFromEnd = mediaGroupIdToMessageIndex.get(message.msg.media_group_id)
+        if(indexFromEnd === undefined) {
+          indexFromEnd = indexFromEndEnd++
+          mediaGroupIdToMessageIndex.set(message.msg.media_group_id, indexFromEnd)
+        }
+      }
+
+      result[i] = indexFromEnd
+    }
+
+    return result
+  })()
+
   type PhotoStatus = 'done' | 'downloading' | 'error' | 'not-available'
   type PhotoSubset = { status: PhotoStatus, dataUrl: string | undefined }
   type PhotoQuotaCandidate = {
@@ -1387,20 +1411,24 @@ export async function fetchMessages(
       | { type: 'photo', fileUniqueId: string }
       | { type: 'image', key: string }
   }
-  const photosByOrder = new Map<number, PhotoQuotaCandidate[]>()
+  const photosList: PhotoQuotaCandidate[] = []
   const addQuotaCandidate = (
-    order: number,
     photo: PhotoSubset,
     byteLength: number,
     source: PhotoQuotaCandidate['source'],
   ) => {
-    let arr = photosByOrder.get(order)
-    if(arr === undefined) {
-      arr = []
-      photosByOrder.set(order, arr)
-    }
-    arr.push({ photo, byteLength, source })
+    photosList.push({ photo, byteLength, source })
   }
+
+  const messagesToFetchImagesFor = (() => {
+    const result: AnyMessageWithAttachments[] = []
+    for(let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i]
+      const indexFromEnd = messagesIndexFromEnd[i]
+      if(indexFromEnd === 0) result.push(message)
+    }
+    return result
+  })()
 
   const [photoRowsById, { linkInfosMap, imagesMap }] = await U.all([
     (async() => {
@@ -1417,9 +1445,8 @@ export async function fetchMessages(
           if(id) fileUniqueIds.add(id)
         }
       }
-      // Insertion order is from latest to earliest.
-      for(let off = 0; off < Math.min(10, messages.length); off++) {
-        const message = messages[messages.length - 1 - off]
+
+      for(const message of messagesToFetchImagesFor) {
         addMessage(message)
         if(message.replyToMessage !== undefined) addMessage(message.replyToMessage)
       }
@@ -1447,7 +1474,7 @@ export async function fetchMessages(
     })(),
     (async() => {
       const urls = new Set<string>()
-      for(const { msg, replyToMessage } of messages) {
+      for(const { msg, replyToMessage } of messagesToFetchImagesFor) {
         const url = msg.link_preview_options?.url
         if(url) urls.add(url)
 
@@ -1488,12 +1515,12 @@ export async function fetchMessages(
     })(),
   ])
 
-  const processMessageImageAttachments = (message: AnyMessageWithAttachments, order: number) => {
+  const processMessageImageAttachments = (message: AnyMessageWithAttachments) => {
     for(const photo of message.photos) {
       const photoRow = photoRowsById.get(photo.file_unique_id)
       if(photoRow !== undefined) {
         photo.status = photoRow.status
-        addQuotaCandidate(order, photo, photoRow.byteLength, {
+        addQuotaCandidate(photo, photoRow.byteLength, {
           type: 'photo',
           fileUniqueId: photo.file_unique_id,
         })
@@ -1505,7 +1532,7 @@ export async function fetchMessages(
       const photoRow = photoRowsById.get(photo.file_unique_id)
       if(photoRow !== undefined) {
         photo.status = photoRow.status
-        addQuotaCandidate(order, photo, photoRow.byteLength, {
+        addQuotaCandidate(photo, photoRow.byteLength, {
           type: 'photo',
           fileUniqueId: photo.file_unique_id,
         })
@@ -1518,7 +1545,7 @@ export async function fetchMessages(
         const photoRow = photoRowsById.get(photo.file_unique_id)
         if(photoRow !== undefined) {
           photo.status = photoRow.status
-          addQuotaCandidate(order, photo, photoRow.byteLength, {
+          addQuotaCandidate(photo, photoRow.byteLength, {
             type: 'photo',
             fileUniqueId: photo.file_unique_id,
           })
@@ -1532,7 +1559,7 @@ export async function fetchMessages(
       const photoRow = photoRowsById.get(photo.file_unique_id)
       if(photoRow !== undefined) {
         photo.status = photoRow.status
-        addQuotaCandidate(order, photo, photoRow.byteLength, {
+        addQuotaCandidate(photo, photoRow.byteLength, {
           type: 'photo',
           fileUniqueId: photo.file_unique_id,
         })
@@ -1564,7 +1591,7 @@ export async function fetchMessages(
         })()
         const photo = imageInfo?.photo
         if(photo?.status === 'done' && imageInfo !== undefined) {
-          addQuotaCandidate(order, photo, imageInfo.byteLength, {
+          addQuotaCandidate(photo, imageInfo.byteLength, {
             type: 'image',
             key: imageInfo.key,
           })
@@ -1580,37 +1607,30 @@ export async function fetchMessages(
     }
   }
 
-  for(const message of messages) {
-    processMessageImageAttachments(message, message.msg.message_id)
-    // NOTE: this goes after the main message since quota goes from earliest image inside
-    // a message to latest. So this has less chance of loading.
-    // But we use parent message id so that if the parent is newer, reply images
-    // have priority over previous messages.
+  for(const message of messagesToFetchImagesFor) {
+    processMessageImageAttachments(message)
     if(message.replyToMessage !== undefined) {
-      processMessageImageAttachments(message.replyToMessage, message.msg.message_id)
+      processMessageImageAttachments(message.replyToMessage)
     }
   }
 
   {
-    const photosList = [...photosByOrder].sort((a, b) => -(a[0] - b[0]))
-    const photoQuota = { remainingCount: 5, remainingSize: 5_000_000 }
+    const photoQuota = { remainingCount: 10, remainingSize: 10_000_000 }
     const selectedPhotos: PhotoQuotaCandidate[] = []
-    for(const [_, photos] of photosList) {
-      for(const candidate of photos) {
-        const { photo } = candidate
-        if(photo.status === 'done') {
-          if(
-            photoQuota.remainingCount > 0
-              && photoQuota.remainingSize >= candidate.byteLength
-          ) {
-            photoQuota.remainingCount--
-            photoQuota.remainingSize -= candidate.byteLength
-            selectedPhotos.push(candidate)
-          }
-          else {
-            photo.status = 'not-available'
-            photo.dataUrl = undefined
-          }
+    for(const candidate of photosList) {
+      const { photo } = candidate
+      if(photo.status === 'done') {
+        if(
+          photoQuota.remainingCount > 0
+            && photoQuota.remainingSize >= candidate.byteLength
+        ) {
+          photoQuota.remainingCount--
+          photoQuota.remainingSize -= candidate.byteLength
+          selectedPhotos.push(candidate)
+        }
+        else {
+          photo.status = 'not-available'
+          photo.dataUrl = undefined
         }
       }
     }
