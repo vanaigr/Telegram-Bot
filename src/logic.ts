@@ -1296,6 +1296,8 @@ type Sticker = {
   thumbnail: Photo | undefined
 }
 
+type MessageFrom = 'user' | 'assistant'
+
 type BaseMessageWithAttachments = {
   msg: Types.Message
   replyToMessage: ReplyMessageWithAttachments | undefined
@@ -1354,7 +1356,6 @@ export async function fetchMessages(
     'from', t,
     'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
     ...(ctx?.lastMessage !== undefined ? ['and', t.messageId, '<=', Db.param(ctx.lastMessage)] : []),
-    'and', Db.eq(t.type, Db.param('user')),
     'order by', t.messageId, 'desc', // date resolution is too low
     'limit 20',
   ).then(it => it.reverse())
@@ -1841,12 +1842,34 @@ export async function messagesToModelInput(
   }
 */
 
-  const messageSubset = messages.slice(
-    messages.findLastIndex(it => it.msg.text?.startsWith('/amnesia')) + 1
-  )
+  const messageSubsetBeginI = messages.findLastIndex(it => it.msg.text?.startsWith('/amnesia')) + 1
 
-  for(const message of messageSubset) {
-    await messageToModelInput(message, openrouterMessages, log)
+  const showFullGenerationBeginI = (() => {
+    let i = messages.length - 1
+    let messageC = 0
+    while(i > 0) {
+      if(!isMessageFromBot(messages[i])) {
+        messageC++
+      }
+
+      if(messageC >= 3) {
+        break
+      }
+
+      i--
+    }
+
+    return i
+  })()
+
+  for(let i = messageSubsetBeginI; i < messages.length; i++) {
+    const message = messages[i]
+    await messageToModelInput(
+      message,
+      i >= showFullGenerationBeginI,
+      openrouterMessages,
+      log,
+    )
   }
 
   ;(() => {
@@ -1881,8 +1904,13 @@ export async function messagesToModelInput(
   return openrouterMessages
 }
 
+function isMessageFromBot(message: AnyMessageWithAttachments) {
+  return message.msg.from?.username === botUsername
+}
+
 async function messageToModelInput(
   message: AnyMessageWithAttachments,
+  showFullGeneration: boolean,
   _output: OpenRouterMessage[],
   log: L.Log,
 ) {
@@ -1948,21 +1976,30 @@ async function messageToModelInput(
     }],
   }
 
-  // TODO: do we even have these? We should only be storing messages in `generation`.
-  if(message.type === 'root' && msg.from?.username === botUsername) {
-    addContent({
-      role: 'assistant',
-      content: [{ type: 'text', text: msg.text ?? '<ERROR: NO TEXT>' }],
-    })
-    addContent(metadataObject)
-    return
+  if(isMessageFromBot(message)) {
+    if(showFullGeneration) return
+
+    if(message.type === 'root') {
+      addContent({
+        role: 'assistant',
+        content: [
+          { type: 'text', text: msg.text ?? '<ERROR: NO TEXT>' },
+          { type: 'text', text: '\n' },
+        ],
+      })
+      addContent(metadataObject)
+      return
+    }
+    else {
+      // fallthrough
+    }
   }
 
   if(message.replyToMessage !== undefined) {
     addContent({ role: 'user', content: [{ type: 'text', text: '> ' }] })
 
     const endI = _output.length
-    await messageToModelInput(message.replyToMessage, _output, log)
+    await messageToModelInput(message.replyToMessage, showFullGeneration, _output, log)
 
     const addIndent = (text: string) => text.split('\n').map((it, i) => (i !== 0 ? '> ' : '') + it).join('\n')
 
@@ -1987,7 +2024,7 @@ async function messageToModelInput(
   content.push({ type: 'text', text: messageText(msg, log) })
 
   for(const photo of photos) {
-    content.push(await photoToMessagePart(log, photo, '<image not available>'))
+    content.push(await photoToMessagePart(log, photo, '<image not loaded>'))
   }
   if(video) {
     content.push({
@@ -1996,13 +2033,13 @@ async function messageToModelInput(
         + (video.info.file_name ?? 'no name')
         + ', '
         + formatDurationSec(video.info.duration)
-        + ' not available>\nThumbnail: '
+        + ' not loaded>\nThumbnail: '
     })
     if(video.thumbnail) {
       content.push(await photoToMessagePart(
         log,
         video.thumbnail,
-        '<thumbnail not available>',
+        '<thumbnail not loaded>',
       ))
     }
   }
@@ -2015,14 +2052,14 @@ async function messageToModelInput(
       content.push(await photoToMessagePart(
         log,
         videoNote.thumbnail,
-        '<thumbnail not available>',
+        '<thumbnail not loaded>',
       ))
     }
   }
   if(msg.voice) {
     content.push({
       type: 'text' as const,
-      text: `<voice, ${formatDurationSec(msg.voice.duration)} not available>`,
+      text: `<voice, ${formatDurationSec(msg.voice.duration)} not loaded>`,
     })
   }
   if(msg.audio) {
@@ -2034,7 +2071,7 @@ async function messageToModelInput(
         + (msg.audio.performer ?? 'unknown')
         + ', '
         + formatDurationSec(msg.audio.duration)
-        + ' not available>',
+        + ' not loaded>',
     })
   }
   if(msg.document) {
@@ -2044,7 +2081,7 @@ async function messageToModelInput(
         + (msg.document.mime_type ?? 'application/octet-stream')
         + ' '
         + (msg.document.file_name ?? 'no name')
-        + ' not available>',
+        + ' not loaded>',
     })
   }
   if(msg.location) {
@@ -2056,13 +2093,13 @@ async function messageToModelInput(
   for(const sticker of stickers) {
     content.push({
       type: 'text' as const,
-      text: `<sticker ${sticker.emoji ?? 'not available'}>`,
+      text: `<sticker ${sticker.emoji ?? 'not loaded'}>`,
     })
     if(sticker.thumbnail?.status === 'done') {
       content.push(await photoToMessagePart(
         log,
         sticker.thumbnail,
-        '<sticker image not available>',
+        '<sticker image not loaded>',
       ))
 
     }
@@ -2076,15 +2113,16 @@ async function messageToModelInput(
       content.push(await photoToMessagePart(
         log,
         linkInfo.image,
-        '<thumbnail not available>',
+        '<thumbnail not loaded>',
       ))
     }
   }
+  content.push({ type: 'text', text: '\n' })
 
   addContent({ role: 'user', content })
   addContent(metadataObject)
 
-  if(message.type === 'root') {
+  if(message.type === 'root' && showFullGeneration) {
     for(const msg of message.generation) {
       _output.push(msg)
     }
@@ -2296,7 +2334,7 @@ export function messageMetadata(
   }
   */
 
-  return headers
+  return headers.trim()
 }
 
 export function messageText(msg: Types.Message, log: L.Log) {

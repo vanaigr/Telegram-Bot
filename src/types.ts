@@ -15,6 +15,7 @@ export type Message = {
   date: number
   edit_date?: number
   reply_to_message?: Message
+  media_group_id?: string
 
   text?: string
   caption?: string

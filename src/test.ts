@@ -1,5 +1,9 @@
 import 'dotenv/config'
+
 import util from 'node:util'
+import fs from 'node:fs'
+import path from 'node:path'
+
 import * as DbClient from './db/client.ts'
 import * as Db from './db/index.ts'
 import * as L from './lib/log.ts'
@@ -9,6 +13,32 @@ import * as Logic from './logic.ts'
 import { OpenRouter } from '@openrouter/sdk'
 
 const log = L.makeLogger(undefined, undefined)
+
+const pool = DbClient.create(log)
+if(!pool) throw new Error()
+
+const dumpPath = path.join(import.meta.dirname, '..', 'tmp', 'messages.json')
+
+if(false) {
+  const messages = await Logic.fetchMessages(pool, log, -1002830050312)
+  fs.writeFileSync(dumpPath, JSON.stringify(messages))
+}
+
+const messages = JSON.parse(fs.readFileSync(dumpPath).toString()) as Awaited<ReturnType<typeof Logic.fetchMessages>>
+
+const messages2 = await Logic.messagesToModelInput({
+  notes: [],
+  messages,
+  log,
+  chatInfo: undefined,
+  caching: false,
+})
+console.log(util.inspect(
+  messages2,
+  { depth: Infinity, colors: true },
+))
+
+await pool.end()
 
 /*
 const pool = DbClient.create(log)
