@@ -77,7 +77,7 @@ enum downloadStatus {
     done
 }
 
-model photos {
+model files {
     chatId BigInt
     // Not sure if it's globally unique or not. In any case we query them by
     // chat, and it's easier to store chat id with it even if it may be duplicated now.

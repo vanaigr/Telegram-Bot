@@ -117,7 +117,7 @@ export const tables = {
         "id": t_bigint,
         "notes": t_textArray,
     },
-    "photos": {
+    "files": {
         "chatId": t_bigint,
         "fileUniqueId": t_text,
         "raw": t_json,

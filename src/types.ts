@@ -93,6 +93,8 @@ export type VideoNote = {
 }
 
 export type Voice = {
+  file_id: string
+  file_unique_id: string
   duration: number // seconds
 }
 

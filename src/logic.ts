@@ -115,19 +115,19 @@ export async function updateReactionRows(
   )
 }
 
-export async function startPhotoTask(
+export async function startFileTask(
   pool: Db.DbPool,
   baseLog: L.Log,
   chatId: number,
-  photo: Types.PhotoSize | undefined
+  photo: FileShortInfo | undefined
 ) {
   if(!photo) return
 
-  const log = baseLog.addedCtx('photo ', [photo.file_unique_id])
+  const log = baseLog.addedCtx('file ', [photo.file_unique_id])
 
   const shouldDownload = await Db.timedTran(pool, async(db) => {
-    const t = Db.t.photos
-    const schema = Db.d.photos
+    const t = Db.t.files
+    const schema = Db.d.files
 
     const existing = await Db.query(db,
       'select', [t.fileUniqueId],
@@ -156,7 +156,7 @@ export async function startPhotoTask(
   if(shouldDownload) {
     waitUntil((async() => {
       try {
-        await downloadPhoto(pool, log, chatId, photo)
+        await downloadFile(pool, log, chatId, photo)
       }
       catch(err) {
         log.E('While downloading: ', [err])
@@ -227,15 +227,20 @@ export async function startLinkTask(
   }
 }
 
-export async function downloadPhoto(
+type FileShortInfo = {
+  file_id: string
+  file_unique_id: string
+}
+
+export async function downloadFile(
   pool: Db.DbPool,
   log: L.Log,
   chatId: number,
-  photo: Types.PhotoSize
+  fileShortInfo: FileShortInfo,
 ) {
   log.I('Downloading')
 
-  const t = Db.t.photos
+  const t = Db.t.files
 
   try {
     log.I('Getting file url')
@@ -243,7 +248,7 @@ export async function downloadPhoto(
     const fileInfoUrl = new URL(
       `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN!}/getFile`
     )
-    fileInfoUrl.searchParams.set('file_id', photo.file_id)
+    fileInfoUrl.searchParams.set('file_id', fileShortInfo.file_id)
     const fileInfoResult = await U.request<TelegramWrapper<Types.File>>({
       url: fileInfoUrl,
       log,
@@ -284,7 +289,7 @@ export async function downloadPhoto(
         Db.set(t.bytes, Db.param(buffer)),
       ]),
       'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
-      'and', Db.eq(t.fileUniqueId, Db.param(photo.file_unique_id)),
+      'and', Db.eq(t.fileUniqueId, Db.param(fileShortInfo.file_unique_id)),
     )
   }
   catch(error) {
@@ -296,7 +301,7 @@ export async function downloadPhoto(
         Db.set(t.status, Db.param('error' as const)),
       ]),
       'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
-      'and', Db.eq(t.fileUniqueId, Db.param(photo.file_unique_id)),
+      'and', Db.eq(t.fileUniqueId, Db.param(fileShortInfo.file_unique_id)),
     )
   }
 }
@@ -580,17 +585,17 @@ export async function reply(
 
     const thresholdP = Db.param(now.subtract({ seconds: 20 }).toJSON())
 
-    const { photos, images, linkInfo } = Db.t
+    const { files, images, linkInfo } = Db.t
     const totalLoading = await Db.query(pool,
       'select', [
         Db.named('totalLoading', Db.func<typeof Db.dbTypes.bigint>('count', '*')),
       ],
       'from', Db.par(
         'select 1',
-        'from', photos,
-        'where', Db.eq(photos.chatId, Db.param(BigInt(chatId))),
-        'and', photos.downloadStartDate, '>', thresholdP,
-        'and', Db.eq(photos.status, Db.param('downloading' as const)),
+        'from', files,
+        'where', Db.eq(files.chatId, Db.param(BigInt(chatId))),
+        'and', files.downloadStartDate, '>', thresholdP,
+        'and', Db.eq(files.status, Db.param('downloading' as const)),
 
         'union all',
 
@@ -1273,9 +1278,11 @@ export type OpenRouterResponse = OpenRouter['chat']['send'] extends {
   (a: { chatRequest: { messages: any, stream: boolean } }): infer U2
 } ? Awaited<R> : never
 
+type FileStatus = 'done' | 'downloading' | 'error' | 'not-available'
+
 type Photo = {
   file_unique_id: string
-  status: 'done' | 'downloading' | 'error' | 'not-available'
+  status: FileStatus
   dataUrl: string | undefined
   info: Types.PhotoSize
 }
@@ -1295,11 +1302,17 @@ type Sticker = {
   emoji: string | undefined
   thumbnail: Photo | undefined
 }
+type Voice = {
+  info: Types.Voice
+  status: FileStatus
+  data: { data: string, format: string } | undefined
+}
 
 type BaseMessageWithAttachments = {
   msg: Types.Message
   replyToMessage: ReplyMessageWithAttachments | undefined
   photos: Photo[]
+  voice: Voice | undefined
   video: Video | undefined
   videoNote: VideoNote | undefined
   stickers: Sticker[]
@@ -1402,23 +1415,29 @@ export async function fetchMessages(
     return result
   })()
 
-  type PhotoStatus = 'done' | 'downloading' | 'error' | 'not-available'
-  type PhotoSubset = { status: PhotoStatus, dataUrl: string | undefined }
-  type PhotoQuotaCandidate = {
-    photo: PhotoSubset
+  type ImageInfo = {
+    key: string
+    photo: { status: FileStatus, dataUrl: string | undefined }
     byteLength: number
-    source:
-      | { type: 'photo', fileUniqueId: string }
-      | { type: 'image', key: string }
   }
-  const photosList: PhotoQuotaCandidate[] = []
-  const addQuotaCandidate = (
-    photo: PhotoSubset,
-    byteLength: number,
-    source: PhotoQuotaCandidate['source'],
-  ) => {
-    photosList.push({ photo, byteLength, source })
+  type PhotoCandidate = {
+    type: 'photo'
+    photo: Photo
+    byteLength: number
   }
+  type VoiceCandidate = {
+    type: 'voice'
+    voice: Voice
+    byteLength: number
+  }
+  type ImageCandidate = {
+    type: 'image'
+    imageInfo: ImageInfo
+    byteLength: number
+  }
+
+  type FileQuotaCandidate = PhotoCandidate | VoiceCandidate | ImageCandidate
+  const fileList: FileQuotaCandidate[] = []
 
   const messagesToFetchImagesFor = (() => {
     const result: AnyMessageWithAttachments[] = []
@@ -1430,14 +1449,15 @@ export async function fetchMessages(
     return result
   })()
 
-  const [photoRowsById, { linkInfosMap, imagesMap }] = await U.all([
+  const [fileRowsById, { linkInfosMap, imagesMap }] = await U.all([
     (async() => {
       const fileUniqueIds = new Set<string>()
       const addMessage = (message: AnyMessageWithAttachments) => {
-        const { photos, video, videoNote, stickers } = message
+        const { photos, voice, video, videoNote, stickers } = message
         for(let j = photos.length - 1; j > -1; j--) {
           fileUniqueIds.add(photos[j].file_unique_id)
         }
+        if(voice) fileUniqueIds.add(voice.info.file_unique_id)
         if(video?.thumbnail) fileUniqueIds.add(video.thumbnail.file_unique_id)
         if(videoNote?.thumbnail) fileUniqueIds.add(videoNote.thumbnail.file_unique_id)
         for(const it of stickers) {
@@ -1451,9 +1471,9 @@ export async function fetchMessages(
         if(message.replyToMessage !== undefined) addMessage(message.replyToMessage)
       }
 
-      const t = Db.t.photos
+      const t = Db.t.files
       const arrayP = Db.param([...fileUniqueIds])
-      const photoRows = await Db.query(conn,
+      const fileRows = await Db.query(conn,
         'select', [
           t.status,
           t.fileUniqueId,
@@ -1468,9 +1488,9 @@ export async function fetchMessages(
         'and', Db.eq(t.status, Db.param('done' as const)),
         'order by', Db.func('array_position', arrayP, t.fileUniqueId),
       )
-      const photoRowsById = new Map(photoRows.map(it => [it.fileUniqueId, it]))
+      const fileRowsById = new Map(fileRows.map(it => [it.fileUniqueId, it]))
 
-      return photoRowsById
+      return fileRowsById
     })(),
     (async() => {
       const urls = new Set<string>()
@@ -1517,38 +1537,37 @@ export async function fetchMessages(
 
   const processMessageImageAttachments = (message: AnyMessageWithAttachments) => {
     for(const photo of message.photos) {
-      const photoRow = photoRowsById.get(photo.file_unique_id)
+      const photoRow = fileRowsById.get(photo.file_unique_id)
       if(photoRow !== undefined) {
         photo.status = photoRow.status
-        addQuotaCandidate(photo, photoRow.byteLength, {
-          type: 'photo',
-          fileUniqueId: photo.file_unique_id,
-        })
+        fileList.push({ type: 'photo', photo, byteLength: photoRow.byteLength })
+      }
+    }
+
+    if(message.voice) {
+      const row = fileRowsById.get(message.voice.info.file_unique_id)
+      if(row !== undefined) {
+        message.voice.status = row.status
+        fileList.push({ type: 'voice', voice: message.voice, byteLength: row.byteLength })
       }
     }
 
     if(message.video?.thumbnail) {
       const photo = message.video.thumbnail
-      const photoRow = photoRowsById.get(photo.file_unique_id)
+      const photoRow = fileRowsById.get(photo.file_unique_id)
       if(photoRow !== undefined) {
         photo.status = photoRow.status
-        addQuotaCandidate(photo, photoRow.byteLength, {
-          type: 'photo',
-          fileUniqueId: photo.file_unique_id,
-        })
+        fileList.push({ type: 'photo', photo, byteLength: photoRow.byteLength })
       }
     }
 
     if(message.videoNote?.thumbnail) {
       const photo = message.videoNote.thumbnail
       if(photo) {
-        const photoRow = photoRowsById.get(photo.file_unique_id)
+        const photoRow = fileRowsById.get(photo.file_unique_id)
         if(photoRow !== undefined) {
           photo.status = photoRow.status
-          addQuotaCandidate(photo, photoRow.byteLength, {
-            type: 'photo',
-            fileUniqueId: photo.file_unique_id,
-          })
+          fileList.push({ type: 'photo', photo, byteLength: photoRow.byteLength })
         }
       }
     }
@@ -1556,13 +1575,10 @@ export async function fetchMessages(
     for(const it of message.stickers) {
       const photo = it.thumbnail
       if(!photo) continue
-      const photoRow = photoRowsById.get(photo.file_unique_id)
+      const photoRow = fileRowsById.get(photo.file_unique_id)
       if(photoRow !== undefined) {
         photo.status = photoRow.status
-        addQuotaCandidate(photo, photoRow.byteLength, {
-          type: 'photo',
-          fileUniqueId: photo.file_unique_id,
-        })
+        fileList.push({ type: 'photo', photo, byteLength: photoRow.byteLength })
       }
     }
 
@@ -1570,7 +1586,7 @@ export async function fetchMessages(
     if(url) {
       const linkInfo = linkInfosMap.get(url ?? '')
       if(linkInfo !== undefined) {
-        const imageInfo = (() => {
+        const imageInfo = ((): ImageInfo | undefined => {
           const url = linkInfo.image
           if(url === null) return undefined
           const key = U.getHash('url', url)
@@ -1591,9 +1607,10 @@ export async function fetchMessages(
         })()
         const photo = imageInfo?.photo
         if(photo?.status === 'done' && imageInfo !== undefined) {
-          addQuotaCandidate(photo, imageInfo.byteLength, {
+          fileList.push({
             type: 'image',
-            key: imageInfo.key,
+            imageInfo,
+            byteLength: imageInfo.byteLength,
           })
         }
 
@@ -1615,95 +1632,139 @@ export async function fetchMessages(
   }
 
   {
-    const photoQuota = { remainingCount: 10, remainingSize: 10_000_000 }
-    const selectedPhotos: PhotoQuotaCandidate[] = []
-    for(const candidate of photosList) {
-      const { photo } = candidate
-      if(photo.status === 'done') {
-        if(
-          photoQuota.remainingCount > 0
-            && photoQuota.remainingSize >= candidate.byteLength
-        ) {
-          photoQuota.remainingCount--
-          photoQuota.remainingSize -= candidate.byteLength
-          selectedPhotos.push(candidate)
-        }
-        else {
-          photo.status = 'not-available'
-          photo.dataUrl = undefined
-        }
-      }
-    }
+    const photosToLoad: PhotoCandidate[] = []
+    const voicesToLoad: VoiceCandidate[] = []
+    const imagesToLoad: ImageCandidate[] = []
 
-    const photoIdsToLoad = [
-      ...new Set(selectedPhotos.flatMap(it => {
-        if(it.source.type !== 'photo') return []
-        return [it.source.fileUniqueId]
-      })),
-    ]
-    const imageKeysToLoad = [
-      ...new Set(selectedPhotos.flatMap(it => {
-        if(it.source.type !== 'image') return []
-        return [it.source.key]
-      })),
-    ]
-
-    const [photoDataUrlsById, imageDataUrlsByKey] = await U.all([
-      (async() => {
-        const photoDataUrlsById = new Map<string, string>()
-        if(photoIdsToLoad.length > 0) {
-          const t = Db.t.photos
-          const photoBytes = await Db.query(conn,
-            'select', [t.fileUniqueId, t.bytes],
-            'from', t,
-            'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
-            'and', Db.inArr(t.fileUniqueId, photoIdsToLoad),
-            'and', Db.eq(t.status, Db.param('done' as const)),
-          )
-          for(const row of photoBytes) {
-            const dataUrl = await bytesToDataUrl(log, row.bytes)
-            if(dataUrl !== undefined) photoDataUrlsById.set(row.fileUniqueId, dataUrl)
-          }
-        }
-        return photoDataUrlsById
-      })(),
-      (async() => {
-        const imageDataUrlsByKey = new Map<string, string>()
-        if(imageKeysToLoad.length > 0) {
-          const t = Db.t.images
-          const imageBytes = await Db.query(conn,
-            'select', [t.key, t.bytes],
-            'from', t,
-            'where', Db.inArr(t.key, imageKeysToLoad),
-            'and', Db.eq(t.status, Db.param('done' as const)),
-          )
-          for(const row of imageBytes) {
-            const dataUrl = await bytesToDataUrl(log, row.bytes)
-            if(dataUrl !== undefined) imageDataUrlsByKey.set(row.key, dataUrl)
-          }
-        }
-        return imageDataUrlsByKey
-      })(),
-    ])
-
-    for(const candidate of selectedPhotos) {
-      const dataUrl = (() => {
-        if(candidate.source.type === 'photo') {
-          return photoDataUrlsById.get(candidate.source.fileUniqueId)
-        }
-        else if(candidate.source.type === 'image') {
-          return imageDataUrlsByKey.get(candidate.source.key)
-        }
+    const quota = { remainingCount: 10, remainingSize: 10_000_000 }
+    for(const candidate of fileList) {
+      const isDone = (() => {
+        if(candidate.type === 'photo') return candidate.photo.status === 'done'
+        if(candidate.type === 'voice') return candidate.voice.status === 'done'
+        return candidate.imageInfo.photo.status === 'done'
       })()
+      if(!isDone) continue
 
-      if(dataUrl === undefined) {
-        candidate.photo.status = 'not-available'
-        candidate.photo.dataUrl = undefined
+      if(
+        quota.remainingCount > 0
+          && quota.remainingSize >= candidate.byteLength
+      ) {
+        quota.remainingCount--
+        quota.remainingSize -= candidate.byteLength
+
+        if(candidate.type === 'photo') photosToLoad.push(candidate)
+        if(candidate.type === 'voice') voicesToLoad.push(candidate)
+        if(candidate.type === 'image') imagesToLoad.push(candidate)
       }
       else {
-        candidate.photo.dataUrl = dataUrl
+        if(candidate.type === 'photo') candidate.photo.status = 'not-available'
+        if(candidate.type === 'voice') candidate.voice.status = 'not-available'
+        if(candidate.type === 'image') candidate.imageInfo.photo.status = 'not-available'
       }
     }
+
+    await U.all([
+      (async() => {
+        if(photosToLoad.length === 0) return
+
+        const photoDataUrlsById = new Map<string, string>()
+        const t = Db.t.files
+        const photoBytes = await Db.query(conn,
+          'select', [t.fileUniqueId, t.bytes],
+          'from', t,
+          'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
+          'and', Db.inArr(
+            t.fileUniqueId,
+            photosToLoad.map(it => it.photo.file_unique_id),
+          ),
+          'and', Db.eq(t.status, Db.param('done' as const)),
+        )
+
+        for(const row of photoBytes) {
+          const dataUrl = await bytesToDataUrl(log, row.bytes)
+          if(dataUrl !== undefined) photoDataUrlsById.set(row.fileUniqueId, dataUrl)
+        }
+
+        for(const candidate of photosToLoad) {
+          const dataUrl = photoDataUrlsById.get(candidate.photo.file_unique_id)
+          if(dataUrl) {
+            candidate.photo.dataUrl = dataUrl
+          }
+          else {
+            candidate.photo.status = 'not-available'
+          }
+        }
+      })(),
+      (async() => {
+        if(voicesToLoad.length === 0) return
+
+        const dataById = new Map<string, { data: string, format: string }>()
+        const t = Db.t.files
+        const photoBytes = await Db.query(conn,
+          'select', [t.fileUniqueId, t.bytes],
+          'from', t,
+          'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
+          'and', Db.inArr(
+            t.fileUniqueId,
+            voicesToLoad.map(it => it.voice.info.file_unique_id),
+          ),
+          'and', Db.eq(t.status, Db.param('done' as const)),
+        )
+        for(const row of photoBytes) {
+          const type = await new FileTypeParser().fromBuffer(row.bytes)
+          if(type === undefined) {
+            log.W('Could not detect file type for voice')
+            continue
+          }
+          if(!type.mime.startsWith('audio/ogg')) {
+            log.W('Unsupported audio format ', [type])
+            continue
+          }
+
+          dataById.set(row.fileUniqueId, {
+            data: row.bytes.toString('base64'),
+            format: 'ogg',
+          })
+        }
+
+        for(const candidate of voicesToLoad) {
+          const data = dataById.get(candidate.voice.info.file_unique_id)
+          if(data) {
+            candidate.voice.data = data
+          }
+          else {
+            candidate.voice.status = 'not-available'
+          }
+        }
+      })(),
+      (async() => {
+        if(imagesToLoad.length === 0) return
+
+        const dataById = new Map<string, string>()
+        const t = Db.t.images
+        const imageBytes = await Db.query(conn,
+          'select', [t.key, t.bytes],
+          'from', t,
+          'where', Db.inArr(t.key, imagesToLoad.map(it => it.imageInfo.key)),
+          'and', Db.eq(t.status, Db.param('done' as const)),
+        )
+        for(const row of imageBytes) {
+          const dataUrl = await bytesToDataUrl(log, row.bytes)
+          if(dataUrl !== undefined) dataById.set(row.key, dataUrl)
+        }
+
+
+        for(const candidate of imagesToLoad) {
+          const data = dataById.get(candidate.imageInfo.key)
+          if(data) {
+            candidate.imageInfo.photo.dataUrl = data
+          }
+          else {
+            candidate.imageInfo.photo.status = 'not-available'
+          }
+        }
+      })(),
+    ])
   }
 
   return messages
@@ -1725,6 +1786,16 @@ function dbMessageToMessageWithAttachments(msg: Types.Message, root: boolean): B
           info: photo,
         }
       ]
+    })(),
+    voice: ((): Voice | undefined => {
+      const info = msg.voice
+      if(!info) return undefined
+
+      return {
+        info: info,
+        status: 'not-available',
+        data: undefined,
+      }
     })(),
     video: ((): Video | undefined => {
       const video = msg.video
@@ -1934,7 +2005,7 @@ async function messageToModelInput(
   _output: OpenRouterMessage[],
   log: L.Log,
 ) {
-  const { msg, photos, video, videoNote, stickers/*, reactions*/, linkInfos } = message
+  const { msg, photos, voice, video, videoNote, stickers/*, reactions*/, linkInfos } = message
   const reactions = message.type === 'root' ? message.reactions : []
 
   type ChatContentText = {
@@ -1945,7 +2016,11 @@ async function messageToModelInput(
     type: 'image_url'
     imageUrl: { url: string }
   };
-  type ChatContentItems = ChatContentText | ChatContentImage
+  type ChatContentAudio = {
+    type: 'input_audio'
+    inputAudio: { data: string, format: string }
+  };
+  type ChatContentItems = ChatContentText | ChatContentImage | ChatContentAudio
   type AllowedMessage = { role: 'assistant', content: ChatContentItems[] }
     | { role: 'user', content: ChatContentItems[] }
     | { role: 'system', content: ChatContentText[] }
@@ -2076,11 +2151,22 @@ async function messageToModelInput(
       ))
     }
   }
-  if(msg.voice) {
-    content.push({
-      type: 'text' as const,
-      text: `<voice, ${formatDurationSec(msg.voice.duration)} not loaded>`,
-    })
+  if(voice) {
+    const part = (() => {
+      if(voice.status === 'done' && voice.data !== undefined) {
+        return {
+          type: 'input_audio' as const,
+          inputAudio: voice.data,
+        }
+      }
+
+      return {
+        type: 'text' as const,
+        text: `<voice, ${formatDurationSec(voice.info.duration)} not loaded>`,
+      }
+    })()
+
+    content.push(part)
   }
   if(msg.audio) {
     content.push({

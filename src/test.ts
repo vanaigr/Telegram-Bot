@@ -20,7 +20,7 @@ if(!pool) throw new Error()
 const dumpPath = path.join(import.meta.dirname, '..', 'tmp', 'messages.json')
 
 if(true) {
-  const messages = await Logic.fetchMessages(pool, log, -1003381622274, { lastMessage: 822 })
+  const messages = await Logic.fetchMessages(pool, log, -1003381622274, { lastMessage: 842 })
   fs.writeFileSync(dumpPath, JSON.stringify(messages))
 }
 
@@ -33,10 +33,12 @@ const messages2 = await Logic.messagesToModelInput({
   chatInfo: undefined,
   caching: false,
 })
+/*
 console.log(util.inspect(
   messages2,
   { depth: Infinity, colors: true },
 ))
+*/
 
 await pool.end()
 
