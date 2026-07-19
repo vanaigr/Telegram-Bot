@@ -574,59 +574,125 @@ export async function reply(
   // Postpone responding for 10 seconds if some attachments are loading.
   // If newer messages arrive, we may not send their images, but we don't
   // want the bot to get stuck forever if there's an active discussion.
-  const maxWaitForAttachments = fromMessageDate((firstLatest.raw).date)
-    .add({ seconds: 10 })
+  // Also telegram sends message with multiple attachments as separate messages
+  // and each message requires received confirmation before telegram sends the next.
+  const maxWait = fromMessageDate((firstLatest.raw).date).add({ seconds: 10 })
+
+  let imagesInfo: { checkAt: T.Instant | undefined } = { checkAt: T.Now.instant() }
+  let mediaGroupInfo = ((): { messageId: number | undefined, checkAt: T.Instant | undefined } => {
+    if(firstLatest.raw.media_group_id === undefined) {
+      return {
+        messageId: undefined,
+        checkAt: undefined,
+      }
+    }
+    else {
+      return {
+        messageId: firstLatest.raw.message_id,
+        checkAt: T.Now.instant().add({ seconds: 2 }),
+      }
+    }
+  })()
+
   while(true) {
-    const now = T.Now.instant()
-    if(T.Instant.compare(now, maxWaitForAttachments) >= 0) {
-      log.W('Time for images expired. Sending as-is')
+    let checkAt: T.Instant | undefined = undefined
+    const updUntil = (newUntil: T.Instant | undefined) => {
+      if(newUntil !== undefined) checkAt = T.max(newUntil, checkAt)
+    }
+    updUntil(imagesInfo.checkAt)
+    updUntil(mediaGroupInfo.checkAt)
+
+    if(checkAt === undefined) break
+    if(T.Instant.compare(checkAt, maxWait) >= 0) {
+      log.W('Time for images/media group expired. Sending as-is')
       break
     }
+    await U.delay(checkAt)
 
-    const thresholdP = Db.param(now.subtract({ seconds: 20 }).toJSON())
+    await U.all([
+      (async() => {
+        const t = Db.t.messages
+        const latest = await Db.query(pool,
+          'select', [t.raw],
+          'from', t,
 
-    const { files, images, linkInfo } = Db.t
-    const totalLoading = await Db.query(pool,
-      'select', [
-        Db.named('totalLoading', Db.func<typeof Db.dbTypes.bigint>('count', '*')),
-      ],
-      'from', Db.par(
-        'select 1',
-        'from', files,
-        'where', Db.eq(files.chatId, Db.param(BigInt(chatId))),
-        'and', files.downloadStartDate, '>', thresholdP,
-        'and', Db.eq(files.status, Db.param('downloading' as const)),
+          'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
+          'and', Db.eq(t.type, Db.param('user' as const)),
 
-        'union all',
+          'order by', t.messageId, 'desc',
+          'limit 1',
+        ).then(it => it.at(0))
 
-        'select 1',
-        'from', linkInfo,
-        // NOTE: not filtering by chats. Fine since thre aren't many chats
-        // this is running in.
-        'where', linkInfo.downloadStartDate, '>', thresholdP,
-        'and', Db.eq(linkInfo.status, Db.param('downloading' as const)),
+        if(!latest?.raw) {
+          log.unreachable()
+          mediaGroupInfo = { messageId: undefined, checkAt: undefined }
+          return
+        }
 
-        'union all',
+        if(latest.raw.message_id === mediaGroupInfo.messageId) {
+          log.I('No new message in media group')
+          mediaGroupInfo = { messageId: mediaGroupInfo.messageId, checkAt: undefined }
+          return
+        }
 
-        'select 1',
-        'from', images,
-        // NOTE: not filtering by chats. Fine since thre aren't many chats
-        // this is running in.
-        'where', images.downloadStartDate, '>', thresholdP,
-        'and', Db.eq(images.status, Db.param('downloading' as const)),
-      ),
-    ).then(it => it.at(0)?.totalLoading ?? 0n)
+        if(latest.raw.media_group_id === undefined) {
+          log.I('Latest message is not in media group')
+          mediaGroupInfo = { messageId: undefined, checkAt: undefined }
+          return
+        }
 
-    if(totalLoading === 0n) {
-      log.I('All images ready')
-      break
-    }
+        log.I('Latest message is new in media group')
+        mediaGroupInfo = {
+          messageId: latest.raw.message_id,
+          checkAt: T.Now.instant().add({ seconds: 2 }),
+        }
+      })(),
+      (async() => {
+        const thresholdP = Db.param(T.Now.instant().subtract({ seconds: 20 }).toJSON())
 
-    log.I('Images being loaded: ', [totalLoading], '. Rechecking in ', [1], 's')
+        const { files, images, linkInfo } = Db.t
+        const totalLoading = await Db.query(pool,
+          'select', [
+            Db.named('totalLoading', Db.func<typeof Db.dbTypes.bigint>('count', '*')),
+          ],
+          'from', Db.par(
+            'select 1',
+            'from', files,
+            'where', Db.eq(files.chatId, Db.param(BigInt(chatId))),
+            'and', files.downloadStartDate, '>', thresholdP,
+            'and', Db.eq(files.status, Db.param('downloading' as const)),
 
-    let until = now.add({ seconds: 1 })
-    if(T.Instant.compare(maxWaitForAttachments, until) < 0) until = maxWaitForAttachments
-    await U.delay(until)
+            'union all',
+
+            'select 1',
+            'from', linkInfo,
+            // NOTE: not filtering by chats. Fine since thre aren't many chats
+            // this is running in.
+            'where', linkInfo.downloadStartDate, '>', thresholdP,
+            'and', Db.eq(linkInfo.status, Db.param('downloading' as const)),
+
+            'union all',
+
+            'select 1',
+            'from', images,
+            // NOTE: not filtering by chats. Fine since thre aren't many chats
+            // this is running in.
+            'where', images.downloadStartDate, '>', thresholdP,
+            'and', Db.eq(images.status, Db.param('downloading' as const)),
+          ),
+        ).then(it => it.at(0)?.totalLoading ?? 0n)
+
+
+        if(totalLoading === 0n) {
+          log.I('All images ready')
+          imagesInfo = { checkAt: undefined }
+        }
+        else {
+          log.I('Images being loaded: ', [totalLoading])
+          imagesInfo = { checkAt: T.Now.instant().add({ seconds: 1 }) }
+        }
+      })(),
+    ])
   }
 
   const notes = await notesPromise
