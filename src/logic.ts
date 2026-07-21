@@ -3,15 +3,14 @@ import util from 'node:util'
 
 import { waitUntil } from '@vercel/functions'
 import { OpenRouter } from '@openrouter/sdk'
-import { FileTypeParser } from 'file-type';
+import { FileTypeParser } from 'file-type'
+import sharp from 'sharp'
 
 import * as Db from './db/index.ts'
 import * as T from './lib/temporal.ts'
 import * as L from './lib/log.ts'
 import * as U from './lib/util.ts'
 import type * as Types from './types.ts'
-import { dbTypes } from './db/tables.ts';
-import { link } from 'node:fs';
 
 export const botName = 'балбес'
 export const botUsername = 'balbes52_bot'
@@ -1082,6 +1081,32 @@ export async function reply(
             }
           }
         }
+        else if(tool.function.name === 'test_image') {
+          log.I('Attaching test image')
+          const buffer = await sharp({
+            create: {
+              width: 128,
+              height: 128,
+              channels: 4,
+              background: { r: 128, g: 73, b: 250 },
+            }
+          })
+            .png()
+            .toBuffer()
+
+          photoToSend = { data: buffer, mime: 'image/png' }
+
+          return {
+            role: 'tool' as const,
+            toolCallId: tool.id,
+            content: [
+              {
+                type: 'text' as const,
+                text: 'Test image attached',
+              },
+            ],
+          }
+        }
         else {
           l.W('Unknown tool ', [tool])
           return {
@@ -1323,6 +1348,13 @@ export async function sendPrompt(
               },
               required: ["note"],
             },
+          },
+        },
+        {
+          type: 'function',
+          function: {
+            name: 'test_image',
+            description: 'Attaches a test image to a message. Use only when asked.',
           },
         },
       ],
