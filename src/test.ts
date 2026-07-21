@@ -20,7 +20,7 @@ if(!pool) throw new Error()
 const dumpPath = path.join(import.meta.dirname, '..', 'tmp', 'messages.json')
 
 if(true) {
-  const messages = await Logic.fetchMessages(pool, log, -1003381622274, { lastMessage: 851 })
+  const messages = await Logic.fetchMessages(pool, log, -1003381622274, { lastMessage: 898 })
   fs.writeFileSync(dumpPath, JSON.stringify(messages))
 }
 

@@ -2204,7 +2204,15 @@ async function messageToModelInput(
     addContent({ role, content: [{ type: 'text', text: '> ' }] })
 
     const endI = _output.length
-    await messageToModelInput(message.replyToMessage, showFullGeneration, _output, log)
+    await messageToModelInput(
+      message.replyToMessage,
+      // NOTE: if the reply is a user message, we shouldn't show the following generation.
+      // If it is a bot message, we can't show the full generation (because we don't have it
+      // in that message, and because the message itself then wouldn't be shown)
+      false,
+      _output,
+      log,
+    )
 
     const addIndent = (text: string) => text.split('\n').map((it, i) => (i !== 0 ? '> ' : '') + it).join('\n')
 
