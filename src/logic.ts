@@ -781,19 +781,24 @@ export async function reply(
         }
 
         log.I('Inserting generated image')
-        await Db.insertMany(
-          pool,
-          Db.t.files,
-          Db.d.files,
-          [{
-            chatId,
-            fileUniqueId: photoData.file_unique_id,
-            raw: JSON.stringify(photoData),
-            status: 'done',
-            bytes: photo.data,
-            downloadStartDate: T.Now.instant().toJSON(),
-          }],
-          {}
+        const row = {
+          chatId: Db.param(chatId),
+          fileUniqueId: Db.param(photoData.file_unique_id),
+          raw: Db.param(JSON.stringify(photoData)),
+          status: Db.param('done'),
+          bytes: Db.param(photo.data),
+          downloadStartDate: Db.param(T.Now.instant().toJSON()),
+        }
+
+        const t = Db.t.files
+        const d = Db.d.files
+        const keys = Db.keys(d)
+        const updateKeys = ['raw', 'status', 'bytes'] as const
+        await Db.queryRaw(pool,
+          'insert into', t, Db.args(keys.map(it => t[it].nameOnly)),
+          'values', Db.list(keys.map(it => row[it])),
+          'on conflict', Db.args([t.chatId.nameOnly, t.fileUniqueId.nameOnly]),
+          'do update set', Db.list(updateKeys.map(it => [t[it].nameOnly, '=', row[it]])),
         )
       })(),
     ])
