@@ -753,22 +753,24 @@ export async function reply(
     const newMessage = responseResult.data.result
     completion.sent = true
 
-    log.I('Inserting response')
     await U.all([
-      Db.insertMany(
-        pool,
-        Db.t.messages,
-        Db.d.messages,
-        [{
-          chatId: newMessage.chat.id,
-          messageId: newMessage.message_id,
-          date: fromMessageDate(newMessage.date).toJSON(),
-          type: 'assistant',
-          raw: JSON.stringify(newMessage),
-          generation: JSON.stringify([]),
-        }],
-        {}
-      ),
+      (async() => {
+        log.I('Inserting response')
+        await Db.insertMany(
+          pool,
+          Db.t.messages,
+          Db.d.messages,
+          [{
+            chatId: newMessage.chat.id,
+            messageId: newMessage.message_id,
+            date: fromMessageDate(newMessage.date).toJSON(),
+            type: 'assistant',
+            raw: JSON.stringify(newMessage),
+            generation: JSON.stringify([]),
+          }],
+          {}
+        )
+      })(),
       (async() => {
         if(photo === undefined) return
 
@@ -778,6 +780,7 @@ export async function reply(
           return
         }
 
+        log.I('Inserting generated image')
         await Db.insertMany(
           pool,
           Db.t.files,
@@ -2048,15 +2051,6 @@ export async function messagesToModelInput(
     })
   }
 
-  /*
-  for(const summary of summaries) {
-    openrouterMessages.push({
-      role: 'system',
-      content: [{type: 'text', text: summary.trim() + '\n'}],
-    })
-  }
-*/
-
   const messageSubsetBeginI = messages.findLastIndex(it => it.msg.text?.startsWith('/amnesia')) + 1
 
   const showFullGenerationBeginI = (() => {
@@ -2195,27 +2189,14 @@ async function messageToModelInput(
     }],
   }
 
-  if(isMessageFromBot(message)) {
-    if(showFullGeneration) return
+  const isBotMessage = isMessageFromBot(message)
 
-    if(message.type === 'root') {
-      addContent({
-        role: 'assistant',
-        content: [
-          { type: 'text', text: msg.text ?? '<ERROR: NO TEXT>' },
-          { type: 'text', text: '\n' },
-        ],
-      })
-      addContent(metadataObject)
-      return
-    }
-    else {
-      // fallthrough
-    }
-  }
+  if(showFullGeneration && isBotMessage) return
+
+  const role = isBotMessage ? 'assistant' as const : 'user' as const
 
   if(message.replyToMessage !== undefined) {
-    addContent({ role: 'user', content: [{ type: 'text', text: '> ' }] })
+    addContent({ role, content: [{ type: 'text', text: '> ' }] })
 
     const endI = _output.length
     await messageToModelInput(message.replyToMessage, showFullGeneration, _output, log)
@@ -2224,6 +2205,8 @@ async function messageToModelInput(
 
     for(let i = endI; i < _output.length; i++) {
       const part = _output[i]
+      part.role = role
+
       if(typeof part.content === 'string') {
         part.content = addIndent(part.content)
       }
@@ -2236,7 +2219,7 @@ async function messageToModelInput(
       }
     }
 
-    addContent({ role: 'user', content: [{ type: 'text', text: '\n' }] })
+    addContent({ role, content: [{ type: 'text', text: '\n' }] })
   }
 
   const content: ChatContentItems[] = []
@@ -2349,7 +2332,7 @@ async function messageToModelInput(
   }
   content.push({ type: 'text', text: '\n' })
 
-  addContent({ role: 'user', content })
+  addContent({ role, content })
   addContent(metadataObject)
 
   if(message.type === 'root' && showFullGeneration) {
