@@ -666,7 +666,7 @@ export async function reply(
             'select 1',
             'from', linkInfo,
             // NOTE: not filtering by chats. Fine since thre aren't many chats
-            // this is running in.
+            // this is running in. // TODO: Why?
             'where', linkInfo.downloadStartDate, '>', thresholdP,
             'and', Db.eq(linkInfo.status, Db.param('downloading' as const)),
 
@@ -754,20 +754,46 @@ export async function reply(
     completion.sent = true
 
     log.I('Inserting response')
-    await Db.insertMany(
-      pool,
-      Db.t.messages,
-      Db.d.messages,
-      [{
-        chatId: newMessage.chat.id,
-        messageId: newMessage.message_id,
-        date: fromMessageDate(newMessage.date).toJSON(),
-        type: 'assistant',
-        raw: JSON.stringify(newMessage),
-        generation: JSON.stringify([]),
-      }],
-      {}
-    )
+    await U.all([
+      Db.insertMany(
+        pool,
+        Db.t.messages,
+        Db.d.messages,
+        [{
+          chatId: newMessage.chat.id,
+          messageId: newMessage.message_id,
+          date: fromMessageDate(newMessage.date).toJSON(),
+          type: 'assistant',
+          raw: JSON.stringify(newMessage),
+          generation: JSON.stringify([]),
+        }],
+        {}
+      ),
+      (async() => {
+        if(photo === undefined) return
+
+        const photoData = newMessage.photo?.at(-1)
+        if(photoData === undefined) {
+          log.W('Image was sent but telegram did not give attachment data')
+          return
+        }
+
+        await Db.insertMany(
+          pool,
+          Db.t.files,
+          Db.d.files,
+          [{
+            chatId,
+            fileUniqueId: photoData.file_unique_id,
+            raw: JSON.stringify(photoData),
+            status: 'done',
+            bytes: photo.data,
+            downloadStartDate: T.Now.instant().toJSON(),
+          }],
+          {}
+        )
+      })(),
+    ])
   }
 
   let lastReply = ''
