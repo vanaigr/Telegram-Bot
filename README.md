@@ -47,6 +47,7 @@ Requires node >= 24 (mine is `24.12.0`) and pnpm >= 10 (mine is `10.26.1`)
 3. Generate random bytes with `node -e 'console.log(require("crypto").randomBytes(150).toString("base64url"))'` and add them as `TELEGRAM_WEBHOOK_SECRET` env var in Vercel
 4. Edit `scripts/setupWebhook.ts` to point at your project
 5. Run `TELEGRAM_BOT_TOKEN=<your token> TELEGRAM_WEBHOOK_SECRET=<your secret> node scripts/setupWebhook.ts` to set up Telegram webhook
+6. Run `TELEGRAM_BOT_TOKEN=<your token> TELEGRAM_WEBHOOK_SECRET=<your secret> node scripts/setupCommands.ts` to set up Telegram commands autocomplete
 
 ### Axiom (optional)
 
