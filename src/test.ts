@@ -12,6 +12,16 @@ import type * as Types from './types.ts'
 import * as Logic from './logic.ts'
 import { OpenRouter } from '@openrouter/sdk'
 
+import Tokenizer, { models } from "ai-tokenizer"
+import * as Encodings from "ai-tokenizer/encoding"
+
+const encoding = Encodings[models['google/gemini-2.5-flash-preview-09-2025'].encoding]
+const tokenizer = new Tokenizer(encoding)
+
+console.log(tokenizer.encode('тест'))
+
+throw 52
+
 const log = L.makeLogger(undefined, undefined)
 
 const pool = DbClient.create(log)

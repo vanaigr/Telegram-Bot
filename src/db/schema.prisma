@@ -10,6 +10,7 @@ generator tables {
 enum messageType {
     user
     assistant
+    mark
 }
 
 model messages {

@@ -7,6 +7,7 @@ import * as U from './lib/util.ts'
 import type * as Types from './types.ts'
 import * as Logic from './logic.ts'
 import * as T from './lib/temporal.ts'
+import * as Markov from './markov.ts'
 
 export async function POST(req: Request): Promise<Response> {
   const axiomLogger = makeLogger(req.headers.get('x-vercel-id') ?? '');
@@ -267,36 +268,48 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
       return
     }
 
-    const shouldAnswer = (() => {
-      if(whitelistInfo.enabled) return true
-
-      const messageText = message.text ?? message.caption ?? ''
-      const mentions = (message.entities ?? message.caption_entities ?? [])
-        .filter(it => it.type === 'mention')
-        .map(it => U.basedSlice(messageText, it.offset, it.offset + it.length))
-
-      if(mentions.includes('@' + Logic.botUsername)) return true
-
-      return false
-    })()
-
-    if(!shouldAnswer) {
-      log.I('Bot in chat is disabled')
-      return
-    }
-
     const completion = { sent: false }
     try {
-      await Db.tran(pool, async(db) => {
-        await Logic.reply(
-          pool,
-          db,
-          l,
-          Logic.fromMessageDate(message.date),
-          message.chat.id,
-          completion
-        )
-      })
+      const markPrefix = '/hi mark'
+      if(messageText.startsWith(markPrefix)) {
+        log.I('Requested random')
+
+        const maxTokens = (() => {
+          const str = messageText.slice(markPrefix.length).match(/\d+/)?.[0]
+          return parseInt(str || '', 10)
+        })()
+
+        await Markov.reply(pool, log.addedCtx('mark'), message.chat.id, maxTokens)
+      }
+      else {
+        const shouldAnswer = (() => {
+          if(whitelistInfo.enabled) return true
+
+          const messageText = message.text ?? message.caption ?? ''
+          const mentions = (message.entities ?? message.caption_entities ?? [])
+            .filter(it => it.type === 'mention')
+            .map(it => U.basedSlice(messageText, it.offset, it.offset + it.length))
+
+          if(mentions.includes('@' + Logic.botUsername)) return true
+
+          return false
+        })()
+
+        if(!shouldAnswer) {
+          log.I('Bot in chat is disabled')
+          return
+        }
+        await Db.tran(pool, async(db) => {
+          await Logic.reply(
+            pool,
+            db,
+            l,
+            Logic.fromMessageDate(message.date),
+            message.chat.id,
+            completion
+          )
+        })
+      }
     }
     catch(error) {
       l.E([error])

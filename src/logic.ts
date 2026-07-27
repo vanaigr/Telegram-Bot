@@ -1461,6 +1461,7 @@ type BaseMessageWithAttachments = {
 
 type RootMessageWithAttachments = BaseMessageWithAttachments & {
   type: 'root'
+  from: 'assistant' | 'user' | 'mark'
   generation: OpenRouterMessage[]
   reactions: Reaction[]
 }
@@ -1481,6 +1482,7 @@ export async function fetchMessages(
     'select', [
       t.raw,
       t.generation,
+      Db.named('from', t.type),
       Db.named(
         'reactions',
         Db.scalar<typeof Db.dbTypes.jsonArray>(Db.par(
@@ -1507,10 +1509,11 @@ export async function fetchMessages(
     return []
   }
 
-  const messages = messagesRaw.map(({ raw: msg, generation, reactions }): RootMessageWithAttachments => {
+  const messages = messagesRaw.map(({ raw: msg, from, generation, reactions }): RootMessageWithAttachments => {
     return {
       ...dbMessageToMessageWithAttachments(msg, true),
       type: 'root',
+      from,
       generation: generation as OpenRouterMessage[],
       reactions: (reactions ?? []).map((it: any) => {
         return {
@@ -2196,7 +2199,7 @@ async function messageToModelInput(
 
   const isBotMessage = isMessageFromBot(message)
 
-  if(showFullGeneration && isBotMessage) return
+  if(showFullGeneration && isBotMessage && !(message.type === 'root' && message.from === 'mark')) return
 
   const role = isBotMessage ? 'assistant' as const : 'user' as const
 
