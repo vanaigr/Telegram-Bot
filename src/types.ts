@@ -1,5 +1,9 @@
 export type Chat = {
   id: number
+  title?: string
+  username?: string
+  first_name?: string
+  last_name?: string
 }
 export type User = {
   id: number
@@ -12,10 +16,12 @@ export type Message = {
   message_id: number
   chat: Chat
   from?: User
+  sender_chat?: Chat
   date: number
   edit_date?: number
   reply_to_message?: Message
   media_group_id?: string
+  forward_origin?: MessageOrigin
 
   text?: string
   caption?: string
@@ -118,4 +124,29 @@ export type Document = {
 export type Sticker = {
   thumbnail?: PhotoSize
   emoji?: string
+}
+
+export type MessageOrigin = MessageOriginUser | MessageOriginHiddenUser | MessageOriginChat | MessageOriginChannel
+export type MessageOriginUser = {
+  type: 'user'
+  date: number
+  sender_user: User
+}
+export type MessageOriginHiddenUser = {
+  type: 'hidden_user'
+  date: number
+  sender_user_name: string
+}
+export type MessageOriginChat = {
+  type: 'chat'
+  date: number
+  sender_chat: Chat
+  author_signature?: string
+}
+export type MessageOriginChannel = {
+  type: 'channel'
+  date: number
+  chat: Chat
+  message_id: number
+  author_signature?: string
 }

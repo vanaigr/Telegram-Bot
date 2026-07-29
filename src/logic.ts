@@ -2084,6 +2084,7 @@ export async function messagesToModelInput(
     await messageToModelInput(
       message,
       i >= showFullGenerationBeginI,
+      false,
       openrouterMessages,
       log,
     )
@@ -2125,34 +2126,56 @@ function isMessageFromBot(message: AnyMessageWithAttachments) {
   return message.msg.from?.username === botUsername
 }
 
+type ChatContentText = {
+  type: 'text'
+  text: string
+}
+type ChatContentImage = {
+  type: 'image_url'
+  imageUrl: { url: string }
+};
+type ChatContentAudio = {
+  type: 'input_audio'
+  inputAudio: { data: string, format: string }
+};
+type ChatContentItems = ChatContentText | ChatContentImage | ChatContentAudio
+type AllowedMessage = { role: 'assistant', content: ChatContentItems[] }
+  | { role: 'user', content: ChatContentItems[] }
+  | { role: 'system', content: ChatContentText[] }
+
 async function messageToModelInput(
   message: AnyMessageWithAttachments,
   showFullGeneration: boolean,
+  actuallyNoItsForwardedTelegramApiDesignIsBeautiful: boolean,
   _output: OpenRouterMessage[],
   log: L.Log,
 ) {
-  const { msg, photos, voice, video, videoNote, stickers/*, reactions*/, linkInfos } = message
-  const reactions = message.type === 'root' ? message.reactions : []
-
-  type ChatContentText = {
-    type: 'text'
-    text: string
-  }
-  type ChatContentImage = {
-    type: 'image_url'
-    imageUrl: { url: string }
-  };
-  type ChatContentAudio = {
-    type: 'input_audio'
-    inputAudio: { data: string, format: string }
-  };
-  type ChatContentItems = ChatContentText | ChatContentImage | ChatContentAudio
-  type AllowedMessage = { role: 'assistant', content: ChatContentItems[] }
-    | { role: 'user', content: ChatContentItems[] }
-    | { role: 'system', content: ChatContentText[] }
-
-
   const addContent = (content: AllowedMessage) => _output.push(content)
+
+  const { msg, photos, voice, video, videoNote, stickers/*, reactions*/, linkInfos } = message
+
+  const metadataObject: AllowedMessage = {
+    role: 'system',
+    content: [{
+      type: 'text',
+      text: actuallyNoItsForwardedTelegramApiDesignIsBeautiful
+        ? forwardedMessageMetadata(msg)
+        : messageMetadata(msg),
+    }],
+  }
+
+  if(!actuallyNoItsForwardedTelegramApiDesignIsBeautiful && message.msg.forward_origin) {
+    await quote(_output, 'user', async() => {
+      await messageToModelInput(message, false, true, _output, log)
+    })
+    addContent(metadataObject)
+    if(message.type === 'root' && showFullGeneration) {
+      for(const msg of message.generation) {
+        _output.push(msg)
+      }
+    }
+    return
+  }
 
   if(msg.new_chat_title !== undefined) {
     addContent({
@@ -2170,7 +2193,7 @@ async function messageToModelInput(
       content: [{
         type: 'text',
         text: JSON.stringify({
-          newChatMembers: msg.new_chat_members.map(it => userToString(it, true)),
+          newChatMembers: msg.new_chat_members.map(it => userToString(it, undefined, true)),
         }),
       }],
     })
@@ -2182,19 +2205,11 @@ async function messageToModelInput(
       content: [{
         type: 'text',
         text: JSON.stringify({
-          leftChatMember: userToString(msg.left_chat_member, true),
+          leftChatMember: userToString(msg.left_chat_member, undefined, true),
         }),
       }],
     })
     return
-  }
-
-  const metadataObject: AllowedMessage = {
-    role: 'system',
-    content: [{
-      type: 'text',
-      text: messageMetadata(msg, reactions),
-    }],
   }
 
   const isBotMessage = isMessageFromBot(message)
@@ -2204,38 +2219,20 @@ async function messageToModelInput(
   const role = isBotMessage ? 'assistant' as const : 'user' as const
 
   if(message.replyToMessage !== undefined) {
-    addContent({ role, content: [{ type: 'text', text: '> ' }] })
+    const reply = message.replyToMessage
 
-    const endI = _output.length
-    await messageToModelInput(
-      message.replyToMessage,
-      // NOTE: if the reply is a user message, we shouldn't show the following generation.
-      // If it is a bot message, we can't show the full generation (because we don't have it
-      // in that message, and because the message itself then wouldn't be shown)
-      false,
-      _output,
-      log,
-    )
-
-    const addIndent = (text: string) => text.split('\n').map((it, i) => (i !== 0 ? '> ' : '') + it).join('\n')
-
-    for(let i = endI; i < _output.length; i++) {
-      const part = _output[i]
-      part.role = role
-
-      if(typeof part.content === 'string') {
-        part.content = addIndent(part.content)
-      }
-      else {
-        for(const item of part.content as ChatContentItems[]) {
-          if(item.type === 'text') {
-            item.text = addIndent(item.text)
-          }
-        }
-      }
-    }
-
-    addContent({ role, content: [{ type: 'text', text: '\n' }] })
+    await quote(_output, role, async() => {
+      await messageToModelInput(
+        reply,
+        // NOTE: if the reply is a user message, we shouldn't show the following generation.
+        // If it is a bot message, we can't show the full generation (because we don't have it
+        // in that message, and because the message itself then wouldn't be shown)
+        false,
+        false,
+        _output,
+        log,
+      )
+    })
   }
 
   const content: ChatContentItems[] = []
@@ -2377,7 +2374,40 @@ async function photoToMessagePart(
     type: 'text' as const,
     text: fallback,
   }
+}
 
+async function quote(
+  _output: OpenRouterMessage[],
+  role: 'user' | 'assistant',
+  inner: () => Promise<void>,
+) {
+  const addContent = (content: AllowedMessage) => _output.push(content)
+
+  addContent({ role, content: [{ type: 'text', text: '> ' }] })
+
+  const endI = _output.length
+
+  await inner()
+
+  const addIndent = (text: string) => text.split('\n').map((it, i) => (i !== 0 ? '> ' : '') + it).join('\n')
+
+  for(let i = endI; i < _output.length; i++) {
+    const part = _output[i]
+    part.role = role
+
+    if(typeof part.content === 'string') {
+      part.content = addIndent(part.content)
+    }
+    else {
+      for(const item of part.content as ChatContentItems[]) {
+        if(item.type === 'text') {
+          item.text = addIndent(item.text)
+        }
+      }
+    }
+  }
+
+  addContent({ role, content: [{ type: 'text', text: '\n' }] })
 }
 
 async function bytesToDataUrl(log: L.Log, bytes: Buffer) {
@@ -2511,55 +2541,43 @@ export function fromMessageDate(messageDate: number) {
   return T.Instant.fromEpochMilliseconds(messageDate * 1000)
 }
 
-export function messageMetadata(
+export function forwardedMessageMetadata(
   msg: Types.Message,
-  reactions: Reaction[] | undefined
 ) {
   let headers = ''
-  if(msg.from) {
-    headers += '- Sent by: ' + userToString(msg.from, true) + '\n'
+
+  const from = msg.forward_origin!
+  if(from.type === 'user') {
+    headers += '- Sent by: ' + userToString(from.sender_user, undefined, true) + '\n'
+  }
+  else if(from.type === 'hidden_user') {
+    headers += '- Sent by: ' + from.sender_user_name + '\n'
+  }
+  else if(from.type === 'chat') {
+    headers += '- Sent by: ' + userToString(undefined, from.sender_chat, true) + '\n'
+  }
+  else if(from.type === 'channel') {
+    headers += '- Sent by: ' + userToString(undefined, from.chat, true) + '\n'
   }
   else {
-    // Never seen this field missing.
-    headers += '- Sent by: ' + userToString(undefined, true) + '\n'
+    headers += '- Sent by: ' + userToString(undefined, undefined, true) + '\n'
   }
+
+  headers += '- At: ' + dateToString(fromMessageDate(from.date)) + '\n'
+
+  return headers.trim()
+}
+
+export function messageMetadata(
+  msg: Types.Message,
+) {
+  let headers = ''
+  headers += '- Sent by: ' + userToString(msg.from, msg.sender_chat, true) + '\n'
   headers += '- messageId: ' + msg.message_id + '\n'
   headers += '- At: ' + dateToString(fromMessageDate(msg.date)) + '\n'
   /*
   if(msg.edit_date !== undefined) {
     headers += '- Edited At: ' + dateToString(fromMessageDate(msg.edit_date))
-  }
-  */
-
-  /*
-  if(reactions) {
-    const reactionsObj: string[] = []
-
-    for(const reaction of reactions) {
-      const emojis: string[] = []
-      for(const point of reaction.info.new_reaction) {
-        if(point.type === 'emoji') emojis.push(point.emoji)
-      }
-      if(emojis.length === 0) continue
-
-      let name: string
-      if(reaction.info.user) {
-        name = userToString(reaction.info.user, false)
-      }
-      else {
-        // reaction.actor_chat is not null, but that is the same as admin
-        name = userToString(undefined, false)
-      }
-
-      let result = emojis.join('')
-      if(reaction.reason) result += ' - ' + reaction.reason
-      reactionsObj.push('    - ' + name + ': ' + result)
-    }
-
-    if(Object.keys(reactionsObj).length > 0) {
-      headers += '- Reactions:\n'
-      headers += reactionsObj.join('\n') + '\n'
-    }
   }
   */
 
@@ -2576,20 +2594,60 @@ export function messageText(msg: Types.Message, log: L.Log) {
   return '<no message>'
 }
 
-export function userToString(user: Types.User | undefined, full: boolean) {
-  if(
-    user === undefined
-      || user.username === undefined // telegram channel repost
-      || user.username === 'GroupAnonymousBot' // channel admin
-  ) {
-    return '@god_user'
+export function userToString(
+  senderUser: Types.User | undefined,
+  senderChat: Types.Chat | undefined,
+  full: boolean,
+) {
+  if(senderChat) {
+    const fullName = (() => {
+      if(senderChat.title) return senderChat.title
+
+      return [senderChat.first_name, senderChat.last_name]
+        .filter(it => it !== undefined)
+        .join(' ')
+    })()
+
+    const username = senderChat.username ?? ''
+
+    const addFullName = full && !!fullName
+    const addUsername = !!username
+
+    if(addFullName && addUsername) {
+      return `${fullName} (@${username})`
+    }
+    else if(addFullName) {
+      return fullName
+    }
+    else if(addUsername) {
+      return username
+    }
+    else {
+      return '@god_user'
+    }
   }
-  if(full) {
-    const fullName = user.first_name + ' ' + (user.last_name ?? '')
-    return fullName.trim() + ' (@' + user.username + ')'
-  }
-  else {
-    return '@' + user.username
+  else if(senderUser) {
+    const fullName = [senderUser.first_name, senderUser.last_name]
+        .filter(it => it !== undefined)
+        .join(' ')
+
+    const username = senderUser.username ?? ''
+
+    const addFullName = full && !!fullName
+    const addUsername = !!username
+
+    if(addFullName && addUsername) {
+      return `${fullName} (@${username})`
+    }
+    else if(addFullName) {
+      return fullName
+    }
+    else if(addUsername) {
+      return username
+    }
+    else {
+      return '@god_user'
+    }
   }
 }
 

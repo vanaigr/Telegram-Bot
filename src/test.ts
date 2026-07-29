@@ -12,20 +12,25 @@ import type * as Types from './types.ts'
 import * as Logic from './logic.ts'
 import { OpenRouter } from '@openrouter/sdk'
 
-import Tokenizer, { models } from "ai-tokenizer"
-import * as Encodings from "ai-tokenizer/encoding"
-
-const encoding = Encodings[models['google/gemini-2.5-flash-preview-09-2025'].encoding]
-const tokenizer = new Tokenizer(encoding)
-
-console.log(tokenizer.encode('тест'))
-
-throw 52
-
 const log = L.makeLogger(undefined, undefined)
 
 const pool = DbClient.create(log)
 if(!pool) throw new Error()
+
+{
+  const messages = await Logic.fetchMessages(pool, log, -1002830050312, { lastMessage: 15494 })
+  const input = await Logic.messagesToModelInput({
+    notes: [],
+    messages,
+    log,
+    chatInfo: undefined,
+    caching: false,
+  })
+  console.log(util.inspect(input, { depth: Infinity, colors: true }))
+
+  await pool.end()
+  throw 52
+}
 
 const dumpPath = path.join(import.meta.dirname, '..', 'tmp', 'messages.json')
 
