@@ -796,7 +796,7 @@ export async function reply(
         const updateKeys = ['raw', 'status', 'bytes'] as const
         await Db.queryRaw(pool,
           'insert into', t, Db.args(keys.map(it => t[it].nameOnly)),
-          'values', Db.list(keys.map(it => row[it])),
+          'values', Db.args(keys.map(it => row[it])),
           'on conflict', Db.args([t.chatId.nameOnly, t.fileUniqueId.nameOnly]),
           'do update set', Db.list(updateKeys.map(it => [t[it].nameOnly, '=', row[it]])),
         )
@@ -1115,32 +1115,6 @@ export async function reply(
             }
           }
         }
-        else if(tool.function.name === 'test_image') {
-          log.I('Attaching test image')
-          const buffer = await sharp({
-            create: {
-              width: 128,
-              height: 128,
-              channels: 4,
-              background: { r: 128, g: 73, b: 250 },
-            }
-          })
-            .png()
-            .toBuffer()
-
-          photoToSend = { data: buffer, mime: 'image/png' }
-
-          return {
-            role: 'tool' as const,
-            toolCallId: tool.id,
-            content: [
-              {
-                type: 'text' as const,
-                text: 'Test image attached',
-              },
-            ],
-          }
-        }
         else {
           l.W('Unknown tool ', [tool])
           return {
@@ -1382,13 +1356,6 @@ export async function sendPrompt(
               },
               required: ["note"],
             },
-          },
-        },
-        {
-          type: 'function',
-          function: {
-            name: 'test_image',
-            description: 'Attaches a test image to a message. Use only when asked.',
           },
         },
       ],
