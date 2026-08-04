@@ -1277,9 +1277,12 @@ export async function sendPrompt(
 ) {
   return await openRouter.chat.send({
     chatRequest: {
-      // good, but we need better. 1. Confuses people a lot. 2. Think's it someone else. 3. Eventually explodes (longer and longer messages)
+      // good, but we need better. 1. Confuses people a lot. 2. Thinks it itself is someone else. 3. Eventually explodes (longer and longer messages)
+      // 4. Gets stuck in message patterns. I.e. uses the same word or response format in every response even if told not to.
       // try again. Maybe seeing its own reasoning helps it not explode.
-      model: 'google/gemini-3-flash-preview',
+      //model: 'google/gemini-3-flash-preview',
+
+      model: 'google/gemini-3.5-flash-lite',
 
       // quite dumb
       //model: 'moonshotai/kimi-k2.5',
