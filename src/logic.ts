@@ -1282,13 +1282,19 @@ export async function sendPrompt(
       // try again. Maybe seeing its own reasoning helps it not explode.
       //model: 'google/gemini-3-flash-preview',
 
-      model: 'google/gemini-3.5-flash-lite',
+      // Bad, does thinking outside thinking blocks.
+      //model: 'google/gemini-3.5-flash-lite',
+
+      model: 'openai/gpt-5.6-luna',
 
       // quite dumb
       //model: 'moonshotai/kimi-k2.5',
 
       maxCompletionTokens: 6000,
       provider: {
+        only: ['amazon-bedrock/us-east-1'],
+        allowFallbacks: false,
+
         dataCollection: 'deny',
       },
       reasoning: {
