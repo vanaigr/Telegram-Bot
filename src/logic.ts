@@ -1294,9 +1294,6 @@ export async function sendPrompt(
 
       maxCompletionTokens: 6000,
       provider: {
-        only: ['amazon-bedrock/us-east-1'],
-        allowFallbacks: false,
-
         dataCollection: 'deny',
       },
       reasoning: {
