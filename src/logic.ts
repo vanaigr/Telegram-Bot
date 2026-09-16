@@ -3277,6 +3277,8 @@ export async function getNotes(
   const t = Db.t.messages
   // Most messages have no notes at all, and the ones that do almost always have
   // exactly 1, so `maxNotes` messages are enough to fill the list.
+  // 2 is added in case some of the messages are duplicates (i.e. preserving a note that is about to fall
+  // out of context, though it doesn't look like the bot ever used that).
   const rows = await Db.query(db,
     'select', [t.notes],
     'from', t,
@@ -3285,7 +3287,7 @@ export async function getNotes(
     // Matches idx__messages__chatId_messageId_notes
     'and', Db.func('cardinality', t.notes), '> 0',
     'order by', t.messageId, 'desc',
-    'limit ' + maxNotes,
+    'limit ' + (maxNotes + 2),
   )
 
   // Scanning backwards, so the most recent copy of a repeated note is the one
