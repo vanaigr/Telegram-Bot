@@ -1,8 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "functions": {
-    "api/webhook.js": {
-      "maxDuration": 300
-    }
-  }
+  "buildCommand": "pnpm build",
+  "installCommand": "pnpm i --frozen-lockfile",
+  "framework": null
 }
