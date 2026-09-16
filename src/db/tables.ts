@@ -80,6 +80,7 @@ export const tables = {
         "type": t_messageType,
         "raw": t_json,
         "generation": t_json,
+        "notes": t_textArray,
     },
     "reactions": {
         "chatId": t_bigint,

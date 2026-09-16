@@ -197,7 +197,10 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
     else if(messageText.startsWith('/notes')) {
       log.I('Requested notes')
 
-      const notes = await Logic.getNotes(pool, message.chat.id)
+      const contextStart = await Logic.getContextStartMessageId(pool, message.chat.id)
+      const notes = contextStart === undefined
+        ? []
+        : await Logic.getNotes(pool, message.chat.id, contextStart)
       const text = notes.map((it, i) => (1 + i) + '. ' + it).join('\n')
 
       await Logic.sendMessage(message.chat.id, { text, entities: [] }, log)
@@ -211,7 +214,7 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
     const schema = Db.d.messages
     const src = Db.makeTable<typeof schema>('src')
     const cols = Db.keys(schema)
-    const updateCols = Db.keys(Db.omit(schema, ['chatId', 'messageId', 'type', 'generation']))
+    const updateCols = Db.keys(Db.omit(schema, ['chatId', 'messageId', 'type', 'generation', 'notes']))
 
     const record: Db.ForInput<typeof schema> = {
       chatId: message.chat.id,
@@ -220,6 +223,7 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
       type: 'user',
       raw: JSON.stringify(message),
       generation: JSON.stringify([]),
+      notes: [],
     }
     const excluded = Db.makeTable<typeof schema>('excluded')
 

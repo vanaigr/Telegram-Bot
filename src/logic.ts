@@ -522,8 +522,6 @@ export async function reply(
   log.I('Locked ', [chatId])
   // Lock aquired - no new replies will be inserted.
 
-  const notesPromise = getNotes(pool, chatId)
-
   const firstLatest = await Db.query(pool,
     'select', [
       Db.t.messages.messageId,
@@ -693,8 +691,8 @@ export async function reply(
     ])
   }
 
-  const notes = await notesPromise
   const messages = await fetchMessages(pool, log, chatId)
+  const notes = await getNotes(pool, chatId, messages[0].msg.message_id)
   const respondsToMessage = messages.at(-1)!
   const respondsToMessageId = respondsToMessage.msg.message_id
 
@@ -721,10 +719,8 @@ export async function reply(
   */
 
   let thisMessageGeneration: OpenRouterMessage[] = []
+  let thisMessageNotes: string[] = []
   let photoToSend: { data: Buffer, mime: string } | undefined
-
-  const notesToModify = notes.slice()
-  let notesModified = false
 
   const cancelTypingStatus = startTypingTask(chatId, log)
 
@@ -766,6 +762,7 @@ export async function reply(
             type: 'assistant',
             raw: JSON.stringify(newMessage),
             generation: JSON.stringify([]),
+            notes: [],
           }],
           {}
         )
@@ -1074,30 +1071,20 @@ export async function reply(
           let { note } = args
 
           if(typeof note === 'string' && (note = note.trim())) {
+            if(note.length > 200) {
+              l.E('Note is too long')
+              return {
+                role: 'tool' as const,
+                toolCallId: tool.id,
+                content: 'Error: note is too long (200 symbols max)',
+              }
+            }
+
             // NOTE: even though we're running these async, since the body up to this point is sync,
             // modifications on notes are guaranteed to happen in the right order.
-            const existingI = notesToModify.indexOf(note)
-            if(existingI !== -1) {
-              notesModified = true
-              notesToModify.splice(existingI, 1)
-              notesToModify.push(note)
-            }
-            else {
-              if(note.length > 200) {
-                l.E('Note is too long')
-                return {
-                  role: 'tool' as const,
-                  toolCallId: tool.id,
-                  content: 'Error: note is too long (200 symbols max)',
-                }
-              }
-
-              notesModified = true
-              notesToModify.push(note)
-              if(notesToModify.length >= 10) {
-                notesToModify.shift()
-              }
-            }
+            // Notes are stored with the message we're responding to, and old ones fall out
+            // on their own once that message is too old to be picked up by getNotes().
+            if(!thisMessageNotes.includes(note)) thisMessageNotes.push(note)
 
             return {
               role: 'tool' as const,
@@ -1127,21 +1114,6 @@ export async function reply(
       for(const result of results) {
         openrouterMessages.push(result)
         thisMessageGeneration.push(result)
-      }
-
-      if(notesModified) {
-        notesModified = false
-
-        const idArg = Db.param(BigInt(chatId))
-        const notesArg = Db.param(notesToModify)
-        await Db.queryRaw(pool,
-          'insert into', Db.t.chatNotes, Db.args([Db.t.chatNotes.id.nameOnly, Db.t.chatNotes.notes.nameOnly]),
-          'values', Db.args([idArg, notesArg]),
-          'on conflict', Db.args([Db.t.chatNotes.id.nameOnly]), 'do update set',
-          Db.list([
-            Db.set(Db.t.chatNotes.notes, notesArg),
-          ]),
-        )
       }
     }
 
@@ -1237,7 +1209,12 @@ export async function reply(
       Db.setJson(Db.t.messages.generation, [
         ...respondsToMessage.generation,
         ...thisMessageGeneration,
-      ])
+      ]),
+      // Appended in sql so that notes taken by a previous response to the same
+      // message are kept.
+      Db.set(Db.t.messages.notes, Db.scalar<typeof Db.dbTypes.textArray>(
+        Db.t.messages.notes, '||', Db.param(thisMessageNotes), '::', Db.d.messages.notes.dbText,
+      )),
     ]),
     'where', Db.eq(Db.t.messages.chatId, Db.param(BigInt(chatId))),
     'and', Db.eq(Db.t.messages.messageId, Db.param(BigInt(respondsToMessage.msg.message_id))),
@@ -1265,7 +1242,7 @@ Think about if you should reply to the messages or not.
 - If you decided not to respond, write "".
 - You can use 'message_reaction' tool to add a reaction to a message.
 
-Use "take_note" tool to note concicely anything that might be important long-term context.
+Use "take_note" tool to note concicely anything that might be important long-term context. Use sparingly.
 
 `.trim() + '\n'
 
@@ -1353,7 +1330,7 @@ export async function sendPrompt(
           type: 'function',
           function: {
             name: 'take_note',
-            description: 'Adds a new note at the end. Only last 10 notes are saved, but you can re-add the same note to move it to the end.',
+            description: `Adds a new note at the end. Only last ${maxNotes} notes are saved, but you can re-add the same note to move it to the end.`,
             parameters: {
               type: "object",
               properties: {
@@ -1445,6 +1422,11 @@ type ReplyMessageWithAttachments = BaseMessageWithAttachments & {
 
 type AnyMessageWithAttachments = RootMessageWithAttachments | ReplyMessageWithAttachments
 
+// Number of messages fetchMessages() gives to the model.
+export const contextMessageCount = 20
+// Number of notes shown to the model.
+const maxNotes = 10
+
 export async function fetchMessages(
   conn: Db.DbConnOrPool,
   log: L.Log,
@@ -1476,7 +1458,7 @@ export async function fetchMessages(
     'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
     ...(ctx?.lastMessage !== undefined ? ['and', t.messageId, '<=', Db.param(ctx.lastMessage)] : []),
     'order by', t.messageId, 'desc', // date resolution is too low
-    'limit 20',
+    'limit ' + contextMessageCount,
   ).then(it => it.reverse())
   if(messagesRaw.length === 0) {
     log.unreachable()
@@ -3283,12 +3265,59 @@ function formatDurationSec(value: number): string {
     + ':' + (Math.floor(value) % 60).toString().padStart(2, '0')
 }
 
-export async function getNotes(db: Db.DbConnOrPool, chatId: number) {
+// Notes of the messages that are still in the context don't need to be repeated -
+// the model sees the `take_note` calls in their generations. So we only collect
+// the ones that were taken before `beforeMessageId` (the first message that is
+// outside the context).
+export async function getNotes(
+  db: Db.DbConnOrPool,
+  chatId: number,
+  beforeMessageId: number | bigint,
+) {
+  const t = Db.t.messages
+  // Most messages have no notes at all, and the ones that do almost always have
+  // exactly 1, so `maxNotes` messages are enough to fill the list.
+  const rows = await Db.query(db,
+    'select', [t.notes],
+    'from', t,
+    'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
+    'and', t.messageId, '<', Db.param(BigInt(beforeMessageId)),
+    // Matches idx__messages__chatId_messageId_notes
+    'and', Db.func('cardinality', t.notes), '> 0',
+    'order by', t.messageId, 'desc',
+    'limit ' + maxNotes,
+  )
+
+  // Scanning backwards, so the most recent copy of a repeated note is the one
+  // that is kept. Reversed at the end to go back to oldest-first.
+  const notes: string[] = []
+  const seen = new Set<string>()
+  for(const row of rows) {
+    for(let i = row.notes.length - 1; i >= 0; i--) {
+      const note = row.notes[i]
+      if(seen.has(note)) continue
+      seen.add(note)
+      notes.push(note)
+      if(notes.length >= maxNotes) break
+    }
+    if(notes.length >= maxNotes) break
+  }
+  notes.reverse()
+
+  return notes
+}
+
+// Id of the oldest message that fetchMessages() still returns, or undefined if
+// the chat is shorter than the context.
+export async function getContextStartMessageId(db: Db.DbConnOrPool, chatId: number) {
+  const t = Db.t.messages
   return await Db.query(db,
-    'select', [Db.t.chatNotes.notes],
-    'from', Db.t.chatNotes,
-    'where', Db.eq(Db.t.chatNotes.id, Db.param(BigInt(chatId))),
-  ).then(it => it.at(0)?.notes ?? [])
+    'select', [t.messageId],
+    'from', t,
+    'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
+    'order by', t.messageId, 'desc',
+    'limit 1 offset ' + (contextMessageCount - 1),
+  ).then(it => it.at(0)?.messageId)
 }
 
 const emptyBuffer: Buffer = Buffer.from([])
