@@ -73,9 +73,6 @@ const traced = await nodeFileTrace([path.join(funcDir, handler)], {
   processCwd: root,
 })
 for(const warning of traced.warnings) {
-  // sharp lists a prebuilt binary for every platform it supports, and only the
-  // one for this platform is installed. The rest are expected to be missing.
-  if(/@img\/sharp-/.test(warning.message)) continue
   console.warn('Trace warning: ' + warning.message)
 }
 

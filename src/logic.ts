@@ -4,7 +4,6 @@ import util from 'node:util'
 import { waitUntil } from '@vercel/functions'
 import { OpenRouter } from '@openrouter/sdk'
 import { FileTypeParser } from 'file-type'
-import sharp from 'sharp'
 
 import * as Db from './db/index.ts'
 import * as T from './lib/temporal.ts'
