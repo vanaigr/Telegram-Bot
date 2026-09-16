@@ -762,7 +762,7 @@ export async function reply(
             type: 'assistant',
             raw: JSON.stringify(newMessage),
             generation: JSON.stringify([]),
-            notes: [],
+            notes: JSON.stringify([]),
           }],
           {}
         )
@@ -1210,11 +1210,10 @@ export async function reply(
         ...respondsToMessage.generation,
         ...thisMessageGeneration,
       ]),
-      // Appended in sql so that notes taken by a previous response to the same
-      // message are kept.
-      Db.set(Db.t.messages.notes, Db.scalar<typeof Db.dbTypes.textArray>(
-        Db.t.messages.notes, '||', Db.param(thisMessageNotes), '::', Db.d.messages.notes.dbText,
-      )),
+      Db.setJson(Db.t.messages.notes, [
+        ...respondsToMessage.notes,
+        ...thisMessageNotes,
+      ]),
     ]),
     'where', Db.eq(Db.t.messages.chatId, Db.param(BigInt(chatId))),
     'and', Db.eq(Db.t.messages.messageId, Db.param(BigInt(respondsToMessage.msg.message_id))),
@@ -1414,6 +1413,7 @@ type RootMessageWithAttachments = BaseMessageWithAttachments & {
   type: 'root'
   from: 'assistant' | 'user' | 'mark'
   generation: OpenRouterMessage[]
+  notes: string[]
   reactions: Reaction[]
 }
 type ReplyMessageWithAttachments = BaseMessageWithAttachments & {
@@ -1438,6 +1438,7 @@ export async function fetchMessages(
     'select', [
       t.raw,
       t.generation,
+      t.notes,
       Db.named('from', t.type),
       Db.named(
         'reactions',
@@ -1465,12 +1466,13 @@ export async function fetchMessages(
     return []
   }
 
-  const messages = messagesRaw.map(({ raw: msg, from, generation, reactions }): RootMessageWithAttachments => {
+  const messages = messagesRaw.map(({ raw: msg, from, generation, notes, reactions }): RootMessageWithAttachments => {
     return {
       ...dbMessageToMessageWithAttachments(msg, true),
       type: 'root',
       from,
       generation: generation as OpenRouterMessage[],
+      notes,
       reactions: (reactions ?? []).map((it: any) => {
         return {
           info: it.raw as Types.MessageReactionUpdated,
@@ -3285,7 +3287,7 @@ export async function getNotes(
     'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
     'and', t.messageId, '<', Db.param(BigInt(beforeMessageId)),
     // Matches idx__messages__chatId_messageId_notes
-    'and', Db.func('cardinality', t.notes), '> 0',
+    'and', Db.func('jsonb_array_length', t.notes), '> 0',
     'order by', t.messageId, 'desc',
     'limit ' + (maxNotes + 2),
   )

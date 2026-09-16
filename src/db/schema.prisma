@@ -21,10 +21,10 @@ model messages {
     type messageType
     raw Json
     generation Json @default("[]")
-    notes String[] @default([])
+    notes Json @default("[]")
 
     @@id([chatId, messageId])
-    // There's also an index CREATE INDEX "idx__messages__chatId_messageId_notes" ON "messages" ("chatId", "messageId") WHERE cardinality("notes") > 0;
+    // There's also an index CREATE INDEX "idx__messages__chatId_messageId_notes" ON "messages" ("chatId", "messageId") WHERE jsonb_array_length("notes") > 0;
 }
 
 model reactions {

@@ -98,7 +98,7 @@ export async function reply(pool: Db.DbPool, log: L.Log, chatId: number, maxToke
           type: 'mark',
           raw: JSON.stringify(newMessage),
           generation: JSON.stringify([]),
-          notes: [],
+          notes: JSON.stringify([]),
         }],
         {}
       )

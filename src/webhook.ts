@@ -223,7 +223,7 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
       type: 'user',
       raw: JSON.stringify(message),
       generation: JSON.stringify([]),
-      notes: [],
+      notes: JSON.stringify([]),
     }
     const excluded = Db.makeTable<typeof schema>('excluded')
 
