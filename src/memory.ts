@@ -365,11 +365,11 @@ Update the description of every listed member using the new messages. A descript
 - Facts: name, age, location, job/study, family, relationships, pets, hobbies, possessions, health, etc.
 - Personality: interests, opinions, sense of humor, how they talk, how they treat others.
 - Relationships with other chat members.
-- Plans, intentions and ongoing situations, with dates. When the outcome of a plan becomes known, keep the plan and record the result (e.g. "planned driving exam on 2026-03-02 — failed, retaking in April").
+- Important plans, intentions and ongoing situations, with dates. When the outcome of a plan becomes known, keep the plan and record the result (e.g. "planned driving exam on 2026-03-02 — failed, retaking in April").
 - Notable events that happened to them, with dates.
 
 Rules:
-- Keep everything from the previous description. Integrate new information instead of appending duplicates. Mark information that is no longer true as past instead of deleting it (e.g. "worked at X until 2026-05").
+- Keep important stuff from the previous description. Integrate new information instead of appending duplicates. Mark information that is no longer true as past instead of deleting it (e.g. "worked at X until 2026-05").
 - Use absolute dates based on message timestamps, never "yesterday" or "recently".
 - Only record what the messages support. Distinguish jokes, sarcasm and banter from sincere statements; note uncertainty when unsure.
 - Attachments (photos, video thumbnails) from members and from the bot may contain relevant information.
@@ -378,6 +378,8 @@ Rules:
 - Write in English, in terse note style, organized by topic.
 
 Return a description for every listed member, identified by userId.
+
+**IMPORTANT**: Regularly prune random information that is no longer relevant (like who ate what at specific dates). Keep only the overacrhing idea.
 `.trim() + '\n'
 
 const summaryPrompt = `
