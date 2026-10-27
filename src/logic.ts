@@ -939,13 +939,13 @@ export async function reply(
           }
         }
       }
-      else if(tool.function.name === 'continue') {
+      else if(tool.function.name === 'idle') {
         return {
-          forceContinue: true,
+          forceContinue: false,
           tool: {
             role: 'tool' as const,
             toolCallId: tool.id,
-            content: 'continuing',
+            content: 'idling',
           }
         }
       }
@@ -1244,6 +1244,19 @@ export async function sendPrompt(
         {
           type: 'function',
           function: {
+            name: 'idle',
+            description: 'Use this to not do any actions',
+            parameters: {
+              type: 'object',
+              properties: {},
+              required: [],
+              additionalProperties: false,
+            },
+          },
+        },
+        {
+          type: 'function',
+          function: {
             name: 'text_reply',
             description: 'Sends a text message',
             parameters: {
@@ -1305,19 +1318,6 @@ export async function sendPrompt(
                 },
               },
               required: ["note"],
-              additionalProperties: false,
-            },
-          },
-        },
-        {
-          type: 'function',
-          function: {
-            name: 'continue',
-            description: 'Call this if you need results from previous calls',
-            parameters: {
-              type: 'object',
-              properties: {},
-              required: [],
               additionalProperties: false,
             },
           },
