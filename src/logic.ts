@@ -726,10 +726,7 @@ export async function reply(
 
   const promises: Promise<unknown>[] = []
 
-  const sendReply = async(reply: string) => {
-    const photo = photoToSend
-    photoToSend = undefined
-
+  const sendReply = async(reply: string, photo: { data: Buffer, mime: string } | undefined) => {
     log.I('Sending response ', photo !== undefined ? 'w/ photo' : 'w/o photo')
 
     const responseResult = await sendMessageOrPhoto(
@@ -800,6 +797,15 @@ export async function reply(
     ])
   }
 
+  // Replies are sent one after another to preserve their order.
+  // The photo is taken at enqueue time so that it is only attached to the first text after it was generated.
+  let replyChain: Promise<unknown> = Promise.resolve()
+  const enqueueReply = (reply: string) => {
+    const photo = photoToSend
+    photoToSend = undefined
+    replyChain = replyChain.then(() => sendReply(reply, photo))
+  }
+
   let lastReply = ''
   for(let iteration = 0;; iteration++) {
     if(iteration > 10) {
@@ -859,6 +865,8 @@ export async function reply(
     thisMessageGeneration.push(response.choices[0].message)
 
     const reactionsToSend: { emoji: string, messageId: number, shortExplanation: string }[] = []
+    const repliesToSend: string[] = []
+    let doneCalled = false
 
     let finishReason = response.choices[0].finishReason
     if(finishReason === 'stop' && (response.choices[0].message.toolCalls?.length ?? 0) > 0) finishReason = 'tool_calls'
@@ -869,7 +877,46 @@ export async function reply(
         const l = log.addedCtx('tool ', [i])
         l.I('Function ', tool.function.name, ' with ', [args])
 
-        if(tool.function.name === 'message_reaction') {
+        if(tool.function.name === 'text_reply') {
+          let { text } = args
+          if(typeof text !== 'string') {
+            l.W('Malformed reply')
+            return {
+              role: 'tool' as const,
+              toolCallId: tool.id,
+              content: 'Error: text is missing',
+            }
+          }
+
+          // replace multiple emoji with utter emptiness
+          text = text.replaceAll(/(\p{Extended_Pictographic}(\uFE0F?| *)){2,} */gu, '')
+          text = text.trim()
+
+          if(isEmptyReply(text)) {
+            l.W('Empty or too long reply')
+            return {
+              role: 'tool' as const,
+              toolCallId: tool.id,
+              content: 'Error: text is empty or too long (4000 symbols max)',
+            }
+          }
+
+          repliesToSend.push(text)
+          return {
+            role: 'tool' as const,
+            toolCallId: tool.id,
+            content: 'sent',
+          }
+        }
+        else if(tool.function.name === 'done') {
+          doneCalled = true
+          return {
+            role: 'tool' as const,
+            toolCallId: tool.id,
+            content: 'done',
+          }
+        }
+        else if(tool.function.name === 'message_reaction') {
           let { emoji, messageId: messageIdRaw } = args
 
           const messageId = parseInt(messageIdRaw)
@@ -1067,7 +1114,7 @@ export async function reply(
             }
           }
         }
-        if(tool.function.name === 'take_note') {
+        else if(tool.function.name === 'take_note') {
           let { note } = args
 
           if(typeof note === 'string' && (note = note.trim())) {
@@ -1123,35 +1170,14 @@ export async function reply(
       break
     }
 
-    const reply = (() => {
-      const rawContent = response.choices[0].message.content
-      if(typeof rawContent === 'string') {
-        let content = rawContent
-
-        // replace multiple emoji with utter emptiness
-        content = content.replaceAll(/(\p{Extended_Pictographic}(\uFE0F?| *)){2,} */gu, '')
-        content = content.trim()
-        // maybe I'm not supposed to do this
-        //response.choices[0].message.content = content // only do this for emojis
-
-        const beginI = content[0] === '"' ? 1 : 0
-        const endI = content[content.length - 1] === '"' ? content.length - 1 : content.length
-        content = U.basedSlice(content, Math.min(endI, beginI), endI)
-
-        return content
-      }
-      else {
-        log.W('Weird content ', [rawContent])
-        return ''
-      }
-    })()
-
-    if(!isEmptyReply(reply)) {
+    // Sent after all tools in the batch finished, so that an image generated
+    // in the same batch is attached to the text.
+    for(const reply of repliesToSend) {
       if(reply === lastReply) {
         log.W('Model/OpenRouter doing its nonsense output again')
       }
       else {
-        promises.push(sendReply(reply))
+        enqueueReply(reply)
       }
 
       lastReply = reply
@@ -1190,10 +1216,20 @@ export async function reply(
     }
 
     if(finishReason === 'stop') {
+      log.W('Model stopped without calling tools. Content: ', [response.choices[0].message.content])
       break
     }
 
     if(finishReason === 'tool_calls') {
+      if(doneCalled) {
+        log.I('Model called done')
+        break
+      }
+      if(repliesToSend.length > 0) {
+        log.I('Replied, stopping')
+        break
+      }
+
       log.I('Going to next turn after ', [finishReason])
       continue
     }
@@ -1202,7 +1238,8 @@ export async function reply(
     break
   }
 
-  if(photoToSend !== undefined) promises.push(sendReply(''))
+  if(photoToSend !== undefined) enqueueReply('')
+  promises.push(replyChain)
 
   await Db.queryRaw(pool,
     'update', Db.t.messages, 'set', Db.list([
@@ -1237,10 +1274,10 @@ export const systemPrompt = `
 You are a group chat participant, a typical 20-something year old. Your ids are @${botUsername}, ${botName}.
 
 Think about if you should reply to the messages or not.
-- If you decided to respond, write a short reply. Wrap your reply in double quotes.
-- If you decided not to respond, write "".
-- You can use 'message_reaction' tool to add a reaction to a message.
+- If you decided to respond, use the 'text_reply' tool. It ends your turn, so call any other tools (search, image generation, etc.) before it.
+- If you decided not to respond, use the 'done' tool.
 
+You can use 'message_reaction' tool to add a reaction to a message.
 Use "take_note" tool to note concicely anything that might be important long-term context. Use sparingly.
 
 `.trim() + '\n'
@@ -1274,7 +1311,23 @@ export async function sendPrompt(
       reasoning: {
         effort: 'high',
       },
+      toolChoice: 'required',
       tools: [
+        {
+          type: 'function',
+          function: {
+            name: 'text_reply',
+            description: 'Sends a text message and ends the turn',
+            parameters: {
+              type: 'object',
+              properties: {
+                text: { 'type': 'string', 'description': 'The reply text' }
+              },
+              required: ['text'],
+              additionalProperties: false,
+            }
+          },
+        },
         {
           type: 'function',
           function: {
@@ -1287,6 +1340,7 @@ export async function sendPrompt(
                 emoji: { type: 'string' },
               },
               required: ['emoji', 'messageId'],
+              additionalProperties: false,
             }
           },
         },
@@ -1306,6 +1360,7 @@ export async function sendPrompt(
                 },
               },
               required: ["queries"],
+              additionalProperties: false,
             },
           },
         },
@@ -1322,6 +1377,7 @@ export async function sendPrompt(
                 },
               },
               required: ["prompt"],
+              additionalProperties: false,
             },
           },
         },
@@ -1338,6 +1394,20 @@ export async function sendPrompt(
                 },
               },
               required: ["note"],
+              additionalProperties: false,
+            },
+          },
+        },
+        {
+          type: 'function',
+          function: {
+            name: 'done',
+            description: 'Ends the turn',
+            parameters: {
+              type: 'object',
+              properties: {},
+              required: [],
+              additionalProperties: false,
             },
           },
         },
