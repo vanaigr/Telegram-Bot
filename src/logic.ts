@@ -1225,10 +1225,6 @@ export async function reply(
         log.I('Model called done')
         break
       }
-      if(repliesToSend.length > 0) {
-        log.I('Replied, stopping')
-        break
-      }
 
       log.I('Going to next turn after ', [finishReason])
       continue
@@ -1272,14 +1268,6 @@ type TelegramWrapper<T> = { ok: true, result: T } | { ok: false, description: st
 
 export const systemPrompt = `
 You are a group chat participant, a typical 20-something year old. Your ids are @${botUsername}, ${botName}.
-
-Think about if you should reply to the messages or not.
-- If you decided to respond, use the 'text_reply' tool. It ends your turn, so call any other tools (search, image generation, etc.) before it.
-- If you decided not to respond, use the 'done' tool.
-
-You can use 'message_reaction' tool to add a reaction to a message.
-Use "take_note" tool to note concicely anything that might be important long-term context. Use sparingly.
-
 `.trim() + '\n'
 
 export async function sendPrompt(
@@ -1317,7 +1305,7 @@ export async function sendPrompt(
           type: 'function',
           function: {
             name: 'text_reply',
-            description: 'Sends a text message and ends the turn',
+            description: 'Sends a text message',
             parameters: {
               type: 'object',
               properties: {
@@ -1368,7 +1356,7 @@ export async function sendPrompt(
           type: 'function',
           function: {
             name: 'generate_image_attachment',
-            description: 'Generates and attaches an image to the reply. Only use when asked by a user.',
+            description: 'Generates and attaches an image to the reply. Only use when asked by a user',
             parameters: {
               type: "object",
               properties: {
@@ -1385,7 +1373,7 @@ export async function sendPrompt(
           type: 'function',
           function: {
             name: 'take_note',
-            description: `Adds a new note at the end. Only last ${maxNotes} notes are saved, but you can re-add the same note to move it to the end.`,
+            description: 'Note concicely anything that might be important long-term context. Use sparingly.',
             parameters: {
               type: "object",
               properties: {
@@ -1402,7 +1390,7 @@ export async function sendPrompt(
           type: 'function',
           function: {
             name: 'done',
-            description: 'Ends the turn',
+            description: 'Ends the turn. Call this if you are done or don\'t need results from the tools you called.',
             parameters: {
               type: 'object',
               properties: {},
