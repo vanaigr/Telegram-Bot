@@ -727,7 +727,11 @@ export async function reply(
   const promises: Promise<unknown>[] = []
 
   const sendReply = async(reply: string, photo: { data: Buffer, mime: string } | undefined) => {
-    log.I('Sending response ', photo !== undefined ? 'w/ photo' : 'w/o photo')
+    if(reply === '' && photo === undefined) {
+      log.I('Skipping empty reply')
+      return
+    }
+    log.I('Sending reply ', photo !== undefined ? 'w/ photo' : 'w/o photo')
 
     const responseResult = await sendMessageOrPhoto(
       chatId,
@@ -864,213 +868,267 @@ export async function reply(
     openrouterMessages.push(response.choices[0].message)
     thisMessageGeneration.push(response.choices[0].message)
 
-    const reactionsToSend: { emoji: string, messageId: number, shortExplanation: string }[] = []
-    const repliesToSend: string[] = []
-    let doneCalled = false
-
     let finishReason = response.choices[0].finishReason
     if(finishReason === 'stop' && (response.choices[0].message.toolCalls?.length ?? 0) > 0) finishReason = 'tool_calls'
 
-    if(finishReason === 'tool_calls') {
-      const results = await Promise.all(response.choices[0].message.toolCalls!.map(async(tool, i) => {
-        const args = JSON.parse(tool.function.arguments)
-        const l = log.addedCtx('tool ', [i])
-        l.I('Function ', tool.function.name, ' with ', [args])
+    if(finishReason !== 'tool_calls') {
+      if(finishReason === 'stop') {
+        log.W('Model stopped without calling tools. Content: ', [response.choices[0].message.content])
+      }
+      else if(finishReason === 'length') {
+        log.W('Ran out of tokens')
+        completion.sent = true
+      }
+      else {
+        log.E('Non-continue finishReason: ', [finishReason], '. Stopping')
+      }
+      break
+    }
 
-        if(tool.function.name === 'text_reply') {
-          let { text } = args
-          if(typeof text !== 'string') {
-            l.W('Malformed reply')
-            return {
+    const reactionsToSend: { emoji: string, messageId: number, shortExplanation: string }[] = []
+    const repliesToSend: string[] = []
+
+    type ToolResult = {
+      role: 'tool',
+      toolCallId: string
+      content: string
+    }
+
+    const results = await Promise.all(response.choices[0].message.toolCalls!.map(async(tool, i): Promise<{ forceContinue: boolean, tool: ToolResult }> => {
+      const args = JSON.parse(tool.function.arguments)
+      const l = log.addedCtx('tool ', [i])
+      l.I('Function ', tool.function.name, ' with ', [args])
+
+      if(tool.function.name === 'text_reply') {
+        let { text } = args
+        if(typeof text !== 'string') {
+          l.W('Malformed reply')
+          return {
+            forceContinue: true,
+            tool: {
               role: 'tool' as const,
               toolCallId: tool.id,
               content: 'Error: text is missing',
-            }
+            },
           }
+        }
 
-          // replace multiple emoji with utter emptiness
-          text = text.replaceAll(/(\p{Extended_Pictographic}(\uFE0F?| *)){2,} */gu, '')
-          text = text.trim()
+        // replace multiple emoji with utter emptiness
+        text = text.replaceAll(/(\p{Extended_Pictographic}(\uFE0F?| *)){2,} */gu, '')
+        text = text.trim()
 
-          if(isEmptyReply(text)) {
-            l.W('Empty or too long reply')
-            return {
+        if(reply.length > 4000) {
+          l.W('Reply is too long')
+          return {
+            forceContinue: true,
+            tool: {
               role: 'tool' as const,
               toolCallId: tool.id,
-              content: 'Error: text is empty or too long (4000 symbols max)',
-            }
+              content: 'Error: text too long (4000 symbols max)',
+            },
           }
+        }
 
-          repliesToSend.push(text)
-          return {
+        repliesToSend.push(text)
+        return {
+          forceContinue: false,
+          tool: {
             role: 'tool' as const,
             toolCallId: tool.id,
             content: 'sent',
           }
         }
-        else if(tool.function.name === 'done') {
-          doneCalled = true
-          return {
+      }
+      else if(tool.function.name === 'continue') {
+        return {
+          forceContinue: true,
+          tool: {
             role: 'tool' as const,
             toolCallId: tool.id,
-            content: 'done',
+            content: 'continuing',
           }
         }
-        else if(tool.function.name === 'message_reaction') {
-          let { emoji, messageId: messageIdRaw } = args
+      }
+      else if(tool.function.name === 'message_reaction') {
+        let { emoji, messageId: messageIdRaw } = args
 
-          const messageId = parseInt(messageIdRaw)
-          if(isFinite(messageId)) {
-            if(emoji === '😂') emoji = '🤣'
-            if(emoji === '❤️') emoji = '❤'
+        const messageId = parseInt(messageIdRaw)
+        if(isFinite(messageId)) {
+          if(emoji === '😂') emoji = '🤣'
+          if(emoji === '❤️') emoji = '❤'
 
-            if(validEmojis.includes(emoji)) {
-              reactionsToSend.push({ emoji, messageId, shortExplanation: '' })
-              return {
+          if(validEmojis.includes(emoji)) {
+            reactionsToSend.push({ emoji, messageId, shortExplanation: '' })
+            return {
+              forceContinue: false,
+              tool: {
                 role: 'tool' as const,
                 toolCallId: tool.id,
                 content: 'done',
-              }
+              },
             }
-            else {
-              l.W('Tried to output ', [emoji], ' but it is not allowed')
-              return {
+          }
+          else {
+            l.W('Tried to output ', [emoji], ' but it is not allowed')
+            return {
+              forceContinue: true,
+              tool: {
                 role: 'tool' as const,
                 toolCallId: tool.id,
                 content: 'Error: pick one of ' + validEmojis.join(', '),
-              }
-            }
-          }
-          else {
-            l.W('Malformed reaction')
-            // Don't bother it
-            return {
-              role: 'tool' as const,
-              toolCallId: tool.id,
-              content: 'done',
-            }
-          }
-        }
-        else if(tool.function.name === 'search') {
-          try {
-            l.I('Searching')
-
-            const searchResult = await openRouter.chat.send({
-              chatRequest: {
-                model: 'openai/gpt-5-nano',
-                plugins: [
-                  {
-                    id: "web",
-                    maxResults: 3,
-                    searchPrompt: '',
-                  },
-                ],
-                messages: [
-                  {
-                    role: 'system',
-                    content: 'You need to perform a search and repeat the search results as-is. Search queries are given below. If it is a link, read the link and repeat the result as-is.',
-                  },
-                  {
-                    role: 'user',
-                    content: tool.function.arguments,
-                  },
-                ],
-              }
-            })
-            l.I('Done searching')
-
-            await Db.insertMany(
-              pool,
-              Db.t.responses,
-              Db.omit(Db.d.responses, ['sequenceNumber']),
-              [{
-                respondsToChatId: chatId,
-                respondsToMessageId,
-                raw: JSON.stringify(searchResult),
-              }],
-              {},
-            )
-
-            const content = searchResult.choices[0].message.content
-            if(typeof content === 'string') {
-              return {
-                role: 'tool' as const,
-                toolCallId: tool.id,
-                content,
-              }
-            }
-            else {
-              l.I('Weird content')
-              return {
-                role: 'tool' as const,
-                toolCallId: tool.id,
-                content: 'Error: could not parse content',
-              }
-            }
-          }
-          catch(error) {
-            l.E('Search failed: ', [error])
-            return {
-              role: 'tool' as const,
-              toolCallId: tool.id,
-              content: 'Error: ' + (('' + error).split('\n')[0] ?? 'unknown'),
-            }
-          }
-        }
-        else if(tool.function.name === 'take_note') {
-          let { note } = args
-
-          if(typeof note === 'string' && (note = note.trim())) {
-            if(note.length > 200) {
-              l.E('Note is too long')
-              return {
-                role: 'tool' as const,
-                toolCallId: tool.id,
-                content: 'Error: note is too long (200 symbols max)',
-              }
-            }
-
-            // NOTE: even though we're running these async, since the body up to this point is sync,
-            // modifications on notes are guaranteed to happen in the right order.
-            // Notes are stored with the message we're responding to, and old ones fall out
-            // on their own once that message is too old to be picked up by getNotes().
-            if(!thisMessageNotes.includes(note)) thisMessageNotes.push(note)
-
-            return {
-              role: 'tool' as const,
-              toolCallId: tool.id,
-              content: 'done',
-            }
-          }
-          else {
-            l.E('Invalid note')
-            return {
-              role: 'tool' as const,
-              toolCallId: tool.id,
-              content: 'Error: note is empty or missing',
+              },
             }
           }
         }
         else {
-          l.W('Unknown tool ', [tool])
+          l.W('Malformed reaction')
+          // Don't bother it
           return {
+            forceContinue: false,
+            tool: {
+              role: 'tool' as const,
+              toolCallId: tool.id,
+              content: 'done',
+            },
+          }
+        }
+      }
+      else if(tool.function.name === 'search') {
+        try {
+          l.I('Searching')
+
+          const searchResult = await openRouter.chat.send({
+            chatRequest: {
+              model: 'openai/gpt-5-nano',
+              plugins: [
+                {
+                  id: "web",
+                  maxResults: 3,
+                  searchPrompt: '',
+                },
+              ],
+              messages: [
+                {
+                  role: 'system',
+                  content: 'You need to perform a search and repeat the search results as-is. Search queries are given below. If it is a link, read the link and repeat the result as-is.',
+                },
+                {
+                  role: 'user',
+                  content: tool.function.arguments,
+                },
+              ],
+            }
+          })
+          l.I('Done searching')
+
+          await Db.insertMany(
+            pool,
+            Db.t.responses,
+            Db.omit(Db.d.responses, ['sequenceNumber']),
+            [{
+              respondsToChatId: chatId,
+              respondsToMessageId,
+              raw: JSON.stringify(searchResult),
+            }],
+            {},
+          )
+
+          const content = searchResult.choices[0].message.content
+          if(typeof content === 'string') {
+            return {
+              forceContinue: false,
+              tool: {
+                role: 'tool' as const,
+                toolCallId: tool.id,
+                content,
+              },
+            }
+          }
+          else {
+            l.I('Weird content')
+            return {
+              forceContinue: true,
+              tool: {
+                role: 'tool' as const,
+                toolCallId: tool.id,
+                content: 'Error: could not parse content',
+              },
+            }
+          }
+        }
+        catch(error) {
+          l.E('Search failed: ', [error])
+          return {
+            forceContinue: true,
+            tool: {
+              role: 'tool' as const,
+              toolCallId: tool.id,
+              content: 'Error: ' + (('' + error).split('\n')[0] ?? 'unknown'),
+            },
+          }
+        }
+      }
+      else if(tool.function.name === 'take_note') {
+        let { note } = args
+
+        if(typeof note === 'string' && (note = note.trim())) {
+          if(note.length > 200) {
+            l.E('Note is too long')
+            return {
+              forceContinue: true,
+              tool: {
+                role: 'tool' as const,
+                toolCallId: tool.id,
+                content: 'Error: note is too long (200 symbols max)',
+              },
+            }
+          }
+
+          // NOTE: even though we're running these async, since the body up to this point is sync,
+          // modifications on notes are guaranteed to happen in the right order.
+          // Notes are stored with the message we're responding to, and old ones fall out
+          // on their own once that message is too old to be picked up by getNotes().
+          if(!thisMessageNotes.includes(note)) thisMessageNotes.push(note)
+
+          return {
+            forceContinue: false,
+            tool: {
+              role: 'tool' as const,
+              toolCallId: tool.id,
+              content: 'done',
+            },
+          }
+        }
+        else {
+          l.E('Invalid note')
+          return {
+            forceContinue: true,
+            tool: {
+              role: 'tool' as const,
+              toolCallId: tool.id,
+              content: 'Error: note is empty or missing',
+            },
+          }
+        }
+      }
+      else {
+        l.W('Unknown tool ', [tool])
+        return {
+          forceContinue: false,
+          tool: {
             role: 'tool' as const,
             toolCallId: tool.id,
             content: 'Error: unknown tool',
-          }
+          },
         }
-      }))
-
-      for(const result of results) {
-        openrouterMessages.push(result)
-        thisMessageGeneration.push(result)
       }
-    }
+    }))
 
-    if(finishReason === 'length') {
-      log.W('Ran out of tokens')
-      completion.sent = true
-      break
+    let shouldContinue = false
+    for(const { forceContinue, tool } of results) {
+      shouldContinue ||= forceContinue
+      openrouterMessages.push(tool)
+      thisMessageGeneration.push(tool)
     }
 
     // Sent after all tools in the batch finished, so that an image generated
@@ -1087,7 +1145,7 @@ export async function reply(
     }
 
     if(reactionsToSend.length > 0) {
-        const reactions = [...new Map(reactionsToSend.map(it => [it.messageId, it])).values()]
+      const reactions = [...new Map(reactionsToSend.map(it => [it.messageId, it])).values()]
 
       promises.push(...reactions.map(async(reaction) => {
         await setMessageReaction(chatId, reaction.messageId, reaction.emoji, log)
@@ -1118,23 +1176,7 @@ export async function reply(
       })())
     }
 
-    if(finishReason === 'stop') {
-      log.W('Model stopped without calling tools. Content: ', [response.choices[0].message.content])
-      break
-    }
-
-    if(finishReason === 'tool_calls') {
-      if(doneCalled) {
-        log.I('Model called done')
-        break
-      }
-
-      log.I('Going to next turn after ', [finishReason])
-      continue
-    }
-
-    log.E('Non-continue finishReason: ', [finishReason], '. Stopping')
-    break
+    if(!shouldContinue) break
   }
 
   if(photoToSend !== undefined) enqueueReply('')
@@ -1160,11 +1202,6 @@ export async function reply(
   await U.all(promises)
 
   log.I('Done responding')
-}
-
-function isEmptyReply(reply: string) {
-  reply = reply.trim()
-  return reply === '' || reply.length > 4000
 }
 
 type TelegramWrapper<T> = { ok: true, result: T } | { ok: false, description: string }
@@ -1275,8 +1312,8 @@ export async function sendPrompt(
         {
           type: 'function',
           function: {
-            name: 'done',
-            description: 'Ends the turn. Call this if you are done or don\'t need results from the tools you called.',
+            name: 'continue',
+            description: 'Call this if you need results from previous calls',
             parameters: {
               type: 'object',
               properties: {},
