@@ -2,6 +2,7 @@ import { OpenRouter } from '@openrouter/sdk'
 
 import * as Db from './db/index.ts'
 import * as L from './lib/log.ts'
+import * as T from './lib/temporal.ts'
 import * as Logic from './logic.ts'
 import type * as Types from './types.ts'
 
@@ -40,7 +41,7 @@ export async function updateMemory(
     'on conflict', Db.args([lock.id.nameOnly]), 'do nothing',
   )
 
-  return await Db.tran(pool, async(forLock) => {
+  return await Db.tran(pool, async(forLock): Promise<'locked' | 'done' | 'error'> => {
     log.I('Locking ', [chatId])
     try {
       await Db.queryRaw(forLock,
@@ -54,12 +55,13 @@ export async function updateMemory(
       if((error as { code?: string }).code !== '55P03') throw error
       // Whoever holds the lock loops until memory is up to date.
       log.I('Already running')
-      return 'locked' as const
+      return 'locked'
     }
     log.I('Locked ', [chatId])
 
     const openRouter = new OpenRouter({ apiKey: process.env.OPENROUTER_KEY! })
 
+    let result: 'done' | 'error' = 'done'
     for(let iteration = 0;; iteration++) {
       const [latest, windowStart] = await Promise.all([
         getLatestMemory(pool, chatId),
@@ -67,23 +69,38 @@ export async function updateMemory(
       ])
       if(windowStart === undefined) {
         log.I('Whole chat is in the context window')
-        return 'done' as const
+        break
       }
       if(latest !== undefined && latest.lastMessageId >= windowStart) {
         log.I('Memory is up to date')
-        return 'done' as const
+        break
       }
 
       const l = log.addedCtx('iteration ', [iteration])
       try {
         const ok = await generateMemory(pool, openRouter, l, chatId, latest)
-        if(!ok) return 'error' as const
+        if(!ok) {
+          result = 'error'
+          break
+        }
       }
       catch(error) {
         l.E([error])
-        return 'error' as const
+        result = 'error'
+        break
       }
     }
+
+    // Only for the latest row, since that's the only one the bot sees.
+    try {
+      await generateSummary(pool, openRouter, log.addedCtx('summary'), chatId)
+    }
+    catch(error) {
+      log.E('While generating summary: ', [error])
+      result = 'error'
+    }
+
+    return result
   })
 }
 
@@ -239,8 +256,62 @@ async function generateMemory(
     if(user.description === '') delete users[userId]
   }
 
-  log.I('Generating summary')
-  /*
+  await Db.queryRaw(pool,
+    'update', memory, 'set', Db.list([
+      Db.setJson(memory.users, users),
+      // The summary stays copied from the previous row until generateSummary() runs.
+      Db.setJson(memory.raw, { descriptions: descriptionsResponse, isPreVersion: false, needsSummary: true }),
+    ]),
+    ...rowWhere,
+  )
+  log.I('Updated memory up to ', [lastMessage.message_id])
+
+  return true
+}
+
+async function generateSummary(
+  pool: Db.DbPool,
+  openRouter: OpenRouter,
+  log: L.Log,
+  chatId: number,
+) {
+  const memory = Db.t.chatUserMemory
+  const latest = await Db.query(pool,
+    'select', [memory.lastMessageId, memory.users, memory.raw],
+    'from', memory,
+    'where', Db.eq(memory.chatId, Db.param(BigInt(chatId))),
+    'order by', memory.lastMessageId, 'desc',
+    'limit 1',
+  ).then(it => it.at(0))
+  const raw = latest?.raw as { needsSummary?: boolean } | undefined
+  if(latest === undefined || !raw?.needsSummary) {
+    log.I('Summary is up to date')
+    return
+  }
+
+  const messages = Db.t.messages
+  const lastMessageDate = await Db.query(pool,
+    'select', [messages.date],
+    'from', messages,
+    'where', Db.eq(messages.chatId, Db.param(BigInt(chatId))),
+    'and', Db.eq(messages.messageId, Db.param(latest.lastMessageId)),
+  ).then(it => it.at(0)?.date)
+  const now = lastMessageDate !== undefined ? T.Instant.from(lastMessageDate) : T.Now.instant()
+
+  const rowWhere = [
+    'where', Db.eq(memory.chatId, Db.param(BigInt(chatId))),
+    'and', Db.eq(memory.lastMessageId, Db.param(latest.lastMessageId)),
+  ]
+
+  // Not retried if generation fails. The row keeps the previous summary.
+  await Db.queryRaw(pool,
+    'update', memory, 'set', Db.list([
+      Db.setJson(memory.raw, { ...raw, needsSummary: false }),
+    ]),
+    ...rowWhere,
+  )
+
+  log.I('Generating summary for ', [latest.lastMessageId])
   const summaryResponse = await openRouter.chat.send({
     chatRequest: {
       model: memoryModel,
@@ -251,9 +322,9 @@ async function generateMemory(
         { role: 'system', content: summaryPrompt },
         {
           role: 'user',
-          content: 'Current time: ' + Logic.dateToString(Logic.fromMessageDate(lastMessage.date)) + '\n\n'
+          content: 'Current time: ' + Logic.dateToString(now) + '\n\n'
             + 'Chat members:\n'
-            + JSON.stringify(Object.entries(users).map(([userId, it]) => ({ userId, ...it })), undefined, 2),
+            + JSON.stringify(Object.entries(latest.users).map(([userId, it]) => ({ userId, ...it })), undefined, 2),
         },
       ],
     },
@@ -262,31 +333,29 @@ async function generateMemory(
   await Logic.insertGeneration(pool, {
     type: 'memorySummary',
     chatId,
-    firstMessageId: messages[0].msg.message_id,
-    lastMessageId: lastMessage.message_id,
+    lastMessageId: latest.lastMessageId.toString(),
     response: summaryResponse,
   })
+
+  if(summaryResponse.choices[0].finishReason === 'content_filter') {
+    log.W('Content filtered. Keeping previous summary')
+    return
+  }
 
   const summary = summaryResponse.choices[0].message.content
   if(typeof summary !== 'string' || summary.trim() === '') {
     log.W('Weird summary content')
-    return false
+    return
   }
-  */
-  const summaryResponse = {}
-  const summary = ''
 
   await Db.queryRaw(pool,
     'update', memory, 'set', Db.list([
-      Db.setJson(memory.users, users),
       Db.set(memory.summary, Db.param(summary.trim())),
-      Db.setJson(memory.raw, { descriptions: descriptionsResponse, summary: summaryResponse, isPreVersion: false }),
+      Db.setJson(memory.raw, { ...raw, needsSummary: false, summary: summaryResponse }),
     ]),
     ...rowWhere,
   )
-  log.I('Updated memory up to ', [lastMessage.message_id])
-
-  return true
+  log.I('Updated summary for ', [latest.lastMessageId])
 }
 
 // Messages after `afterMessageId` with photo and video thumbnails loaded.
