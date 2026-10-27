@@ -114,6 +114,28 @@ async function generateMemory(
   }
   const usersList = Object.entries(users).map(([userId, it]) => ({ userId, ...it }))
 
+  const memory = Db.t.chatUserMemory
+  const rowWhere = [
+    'where', Db.eq(memory.chatId, Db.param(BigInt(chatId))),
+    'and', Db.eq(memory.lastMessageId, Db.param(BigInt(lastMessage.message_id))),
+  ]
+
+  // Copy of the previous row, so that the chunk is skipped if generation fails.
+  await Db.insertMany(
+    pool,
+    memory,
+    Db.omit(Db.d.chatUserMemory, ['createdAt']),
+    [{
+      chatId,
+      lastMessageId: lastMessage.message_id,
+      users: JSON.stringify(latest?.users ?? {}),
+      summary: latest?.summary ?? '',
+      raw: JSON.stringify({ isPreVersion: true }),
+    }],
+    {},
+  )
+  log.I('Inserted pre-version up to ', [lastMessage.message_id])
+
   const transcript: Logic.ChatContentItems[] = []
   for(const message of messages) {
     const sender = message.msg.from === undefined
@@ -183,19 +205,24 @@ async function generateMemory(
     response: descriptionsResponse,
   })
 
-  const descriptionsContent = descriptionsResponse.choices[0].message.content
-  if(typeof descriptionsContent !== 'string') {
-    log.W('Weird content')
-    return false
+  let newDescriptions: { userId: string, description: string }[] = []
+  if(descriptionsResponse.choices[0].finishReason === 'content_filter') {
+    log.W('Content filtered. Keeping previous descriptions')
   }
-  let newDescriptions: { userId: string, description: string }[]
-  try {
-    newDescriptions = JSON.parse(descriptionsContent).users
-    if(!Array.isArray(newDescriptions)) throw new Error('users is not an array')
-  }
-  catch(error) {
-    log.W('Could not parse descriptions: ', [error])
-    return false
+  else {
+    const descriptionsContent = descriptionsResponse.choices[0].message.content
+    if(typeof descriptionsContent !== 'string') {
+      log.W('Weird content')
+      return false
+    }
+    try {
+      newDescriptions = JSON.parse(descriptionsContent).users
+      if(!Array.isArray(newDescriptions)) throw new Error('users is not an array')
+    }
+    catch(error) {
+      log.W('Could not parse descriptions: ', [error])
+      return false
+    }
   }
 
   for(const { userId, description } of newDescriptions) {
@@ -249,20 +276,15 @@ async function generateMemory(
   const summaryResponse = {}
   const summary = ''
 
-  await Db.insertMany(
-    pool,
-    Db.t.chatUserMemory,
-    Db.omit(Db.d.chatUserMemory, ['createdAt']),
-    [{
-      chatId,
-      lastMessageId: lastMessage.message_id,
-      users: JSON.stringify(users),
-      summary: summary.trim(),
-      raw: JSON.stringify({ descriptions: descriptionsResponse, summary: summaryResponse }),
-    }],
-    {},
+  await Db.queryRaw(pool,
+    'update', memory, 'set', Db.list([
+      Db.setJson(memory.users, users),
+      Db.set(memory.summary, Db.param(summary.trim())),
+      Db.setJson(memory.raw, { descriptions: descriptionsResponse, summary: summaryResponse, isPreVersion: false }),
+    ]),
+    ...rowWhere,
   )
-  log.I('Inserted memory up to ', [lastMessage.message_id])
+  log.I('Updated memory up to ', [lastMessage.message_id])
 
   return true
 }
