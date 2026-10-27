@@ -7,10 +7,10 @@ import type * as Types from './types.ts'
 
 export const memoryModel = 'anthropic/claude-haiku-5.5'
 
-const maxChunkMessages = 100
+const maxChunkMessages = 200
 // Images are dropped if they don't fit, but at least this many messages are summarized.
 const minChunkMessages = 20
-const imageQuota = { count: 30, size: 10_000_000 }
+const imageQuota = { count: 20, size: 10_000_000 }
 
 export async function getLatestMemory(conn: Db.DbConnOrPool, chatId: number) {
   const t = Db.t.chatUserMemory
@@ -213,6 +213,7 @@ async function generateMemory(
   }
 
   log.I('Generating summary')
+  /*
   const summaryResponse = await openRouter.chat.send({
     chatRequest: {
       model: memoryModel,
@@ -244,6 +245,9 @@ async function generateMemory(
     log.W('Weird summary content')
     return false
   }
+  */
+  const summaryResponse = {}
+  const summary = ''
 
   await Db.insertMany(
     pool,
@@ -370,16 +374,16 @@ Update the description of every listed member using the new messages. A descript
 
 Rules:
 - Keep important stuff from the previous description. Integrate new information instead of appending duplicates. Mark information that is no longer true as past instead of deleting it (e.g. "worked at X until 2026-05").
+- Prune random information that is no longer relevant (like who ate what at specific dates).
 - Use absolute dates based on message timestamps, never "yesterday" or "recently".
 - Only record what the messages support. Distinguish jokes, sarcasm and banter from sincere statements; note uncertainty when unsure.
 - Attachments (photos, video thumbnails) from members and from the bot may contain relevant information.
 - Messages from the bot (${botIds}) are context only. Do not create a description for the bot, and do not record what the bot says as facts about members. The bot's replies should not be summarized.
-- If the new messages add nothing about a member, return their previous description unchanged.
+- If the new messages add nothing about a member, don't update their description.
 - Write in English, in terse note style, organized by topic.
 
 Return a description for every listed member, identified by userId.
 
-**IMPORTANT**: Regularly prune random information that is no longer relevant (like who ate what at specific dates). Keep only the overacrhing idea.
 `.trim() + '\n'
 
 const summaryPrompt = `
