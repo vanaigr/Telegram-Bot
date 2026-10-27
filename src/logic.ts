@@ -1037,17 +1037,13 @@ export async function reply(
           })
           l.I('Done searching')
 
-          await Db.insertMany(
-            pool,
-            Db.t.responses,
-            Db.omit(Db.d.responses, ['sequenceNumber']),
-            [{
-              respondsToChatId: chatId,
-              respondsToMessageId,
-              raw: JSON.stringify(searchResult),
-            }],
-            {},
-          )
+          await insertGeneration(pool, {
+            type: 'search',
+            chatId,
+            respondsToMessageId,
+            arguments: args,
+            response: searchResult,
+          })
 
           const content = searchResult.choices[0].message.content
           if(typeof content === 'string') {
@@ -2559,6 +2555,18 @@ function startTypingTask(chatId: number, log: L.Log) {
   return () => {
     clearTimeout(timeoutId)
   }
+}
+
+// Intermediate generations that are not replies. Not in `responses`
+// since those mark messages as answered.
+export async function insertGeneration(pool: Db.DbConnOrPool, data: Record<string, unknown>) {
+  await Db.insertMany(
+    pool,
+    Db.t.generations,
+    Db.omit(Db.d.generations, ['sequenceNumber']),
+    [{ data: JSON.stringify(data) }],
+    {},
+  )
 }
 
 async function doBackup(pool: Db.DbConnOrPool, data: unknown) {

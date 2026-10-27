@@ -176,4 +176,8 @@ export const tables = {
         "raw": t_json,
         "createdAt": t_timestamp,
     },
+    "generations": {
+        "sequenceNumber": t_integer,
+        "data": t_json,
+    },
 } as const

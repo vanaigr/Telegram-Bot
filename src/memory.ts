@@ -175,6 +175,13 @@ async function generateMemory(
     },
   })
   log.I('Received descriptions: ', [descriptionsResponse, 'details'])
+  await Logic.insertGeneration(pool, {
+    type: 'memoryDescriptions',
+    chatId,
+    firstMessageId: messages[0].msg.message_id,
+    lastMessageId: lastMessage.message_id,
+    response: descriptionsResponse,
+  })
 
   const descriptionsContent = descriptionsResponse.choices[0].message.content
   if(typeof descriptionsContent !== 'string') {
@@ -224,6 +231,13 @@ async function generateMemory(
     },
   })
   log.I('Received summary: ', [summaryResponse, 'details'])
+  await Logic.insertGeneration(pool, {
+    type: 'memorySummary',
+    chatId,
+    firstMessageId: messages[0].msg.message_id,
+    lastMessageId: lastMessage.message_id,
+    response: summaryResponse,
+  })
 
   const summary = summaryResponse.choices[0].message.content
   if(typeof summary !== 'string' || summary.trim() === '') {

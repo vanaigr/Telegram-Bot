@@ -165,3 +165,9 @@ model chatUserMemory {
 
     @@id([chatId, lastMessageId])
 }
+
+// Intermediate LLM generations (search, memory)
+model generations {
+    sequenceNumber Int @id @default(autoincrement())
+    data Json
+}
