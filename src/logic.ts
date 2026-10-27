@@ -1998,7 +1998,7 @@ export async function messagesToModelInput(
     })
   }
 
-  const messageSubsetBeginI = messages.findLastIndex(it => it.msg.text?.startsWith('/amnesia'))
+  const messageSubsetBeginI = Math.max(messages.findLastIndex(it => it.msg.text?.startsWith('/amnesia')), 0)
 
   const showFullGenerationBeginI = (() => {
     let i = messages.length - 1
