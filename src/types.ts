@@ -150,3 +150,10 @@ export type MessageOriginChannel = {
   message_id: number
   author_signature?: string
 }
+
+// Keyed by user id
+export type ChatMemoryUsers = Record<string, {
+  username?: string
+  firstName?: string
+  description: string
+}>

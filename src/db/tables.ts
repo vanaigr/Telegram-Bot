@@ -165,4 +165,15 @@ export const tables = {
         "bytes": t_bytea,
         "downloadStartDate": t_timestamp,
     },
+    "chatMemoryLocks": {
+        "id": t_bigint,
+    },
+    "chatUserMemory": {
+        "chatId": t_bigint,
+        "lastMessageId": t_bigint,
+        "users": t_json,
+        "summary": t_text,
+        "raw": t_json,
+        "createdAt": t_timestamp,
+    },
 } as const

@@ -8,6 +8,7 @@ import type * as Types from './types.ts'
 import * as Logic from './logic.ts'
 import * as T from './lib/temporal.ts'
 import * as Markov from './markov.ts'
+import * as Memory from './memory.ts'
 
 export async function POST(req: Request): Promise<Response> {
   const axiomLogger = makeLogger(req.headers.get('x-vercel-id') ?? '');
@@ -312,6 +313,17 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
     }
   })()
   waitUntil(replyTask)
+
+  if(botEnabled && !edit) {
+    waitUntil((async() => {
+      try {
+        await Memory.updateMemory(pool, log, message.chat.id)
+      }
+      catch(error) {
+        log.addedCtx('memory').E([error])
+      }
+    })())
+  }
 
   return new Response(JSON.stringify({}))
 }

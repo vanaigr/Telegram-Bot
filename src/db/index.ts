@@ -23,6 +23,10 @@ const modifiedSchema = {
     ...Schema.tables.chatFullInfo,
     raw: Schema.makeDbType<string, Types.ChatFullInfo>('json'),
   },
+  chatUserMemory: {
+    ...Schema.tables.chatUserMemory,
+    users: Schema.makeDbType<string, Types.ChatMemoryUsers>('json'),
+  },
 }
 
 export const dbTypes = Schema.dbTypes;

@@ -145,3 +145,23 @@ model images {
     bytes Bytes
     downloadStartDate DateTime @db.Timestamp(6)
 }
+
+// Locks `chatUserMemory` generation for that chat
+model chatMemoryLocks {
+    id BigInt @id
+}
+
+// Each generation is a new row. The row with the highest lastMessageId is the current one.
+model chatUserMemory {
+    chatId BigInt
+    // Last message included in this generation
+    lastMessageId BigInt
+    // { [userId]: { username?, firstName?, description } }
+    users Json
+    // Terse, currently relevant info about chat members. Given to the bot
+    summary String
+    raw Json
+    createdAt DateTime @db.Timestamp(6) @default(now())
+
+    @@id([chatId, lastMessageId])
+}
