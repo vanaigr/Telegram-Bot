@@ -727,11 +727,6 @@ export async function reply(
   const promises: Promise<unknown>[] = []
 
   const sendReply = async(reply: string, photo: { data: Buffer, mime: string } | undefined) => {
-    if(reply === '' && photo === undefined) {
-      log.I('Skipping empty reply')
-      return
-    }
-
     log.I('Sending response ', photo !== undefined ? 'w/ photo' : 'w/o photo')
 
     const responseResult = await sendMessageOrPhoto(
@@ -869,64 +864,60 @@ export async function reply(
     openrouterMessages.push(response.choices[0].message)
     thisMessageGeneration.push(response.choices[0].message)
 
+    const reactionsToSend: { emoji: string, messageId: number, shortExplanation: string }[] = []
+    const repliesToSend: string[] = []
+    let doneCalled = false
+
     let finishReason = response.choices[0].finishReason
     if(finishReason === 'stop' && (response.choices[0].message.toolCalls?.length ?? 0) > 0) finishReason = 'tool_calls'
 
-    if(finishReason !== 'tool_calls') {
-      if(finishReason === 'length') {
-        log.W('Ran out of tokens')
-        completion.sent = true
-      }
-      else if(finishReason === 'stop') {
-        log.W('Model stopped without calling tools. Content: ', [response.choices[0].message.content])
-      }
-      else {
-        log.E('Non-continue finishReason: ', [finishReason], '. Stopping')
-      }
-      break
-    }
-
-    const reactionsToSend: { emoji: string, messageId: number, shortExplanation: string }[] = []
-    const repliesToSend: string[] = []
-    let done: boolean | undefined
-
-    const calls = response.choices[0].message.toolCalls ?? []
-    if(calls.length !== 1) {
-      log.W('Unexpected number of tool calls ', [calls?.length])
-    }
-
-    const firstToolCallResult = await (async() => {
-      if(calls.length < 1) return
-
-      const stepCall = calls[0]
-      const stepArguments = JSON.parse(stepCall.function.arguments) as StepArguments
-      log.I('Function ', stepCall.function.name, ' with ', [stepArguments])
-      if(stepCall.function.name !== 'step') {
-        log.W('Unexpected tool call ', [stepCall.function.name])
-        return
-      }
-      done = stepArguments.done
-
-      const results = await Promise.all(stepArguments.actions.map(async(action, i): Promise<Record<string, unknown>> => {
+    if(finishReason === 'tool_calls') {
+      const results = await Promise.all(response.choices[0].message.toolCalls!.map(async(tool, i) => {
+        const args = JSON.parse(tool.function.arguments)
         const l = log.addedCtx('tool ', [i])
+        l.I('Function ', tool.function.name, ' with ', [args])
 
-        if(action.tool === 'text_reply') {
-          let { text } = action
+        if(tool.function.name === 'text_reply') {
+          let { text } = args
+          if(typeof text !== 'string') {
+            l.W('Malformed reply')
+            return {
+              role: 'tool' as const,
+              toolCallId: tool.id,
+              content: 'Error: text is missing',
+            }
+          }
 
           // replace multiple emoji with utter emptiness
           text = text.replaceAll(/(\p{Extended_Pictographic}(\uFE0F?| *)){2,} */gu, '')
           text = text.trim()
 
-          if(text.length > 4000) {
-            l.W('Reply too long')
-            return { content: 'Error: text too long (4000 symbols max)' }
+          if(isEmptyReply(text)) {
+            l.W('Empty or too long reply')
+            return {
+              role: 'tool' as const,
+              toolCallId: tool.id,
+              content: 'Error: text is empty or too long (4000 symbols max)',
+            }
           }
 
           repliesToSend.push(text)
-          return { content: 'sent' }
+          return {
+            role: 'tool' as const,
+            toolCallId: tool.id,
+            content: 'sent',
+          }
         }
-        else if(action.tool === 'message_reaction') {
-          let { emoji, messageId: messageIdRaw } = action
+        else if(tool.function.name === 'done') {
+          doneCalled = true
+          return {
+            role: 'tool' as const,
+            toolCallId: tool.id,
+            content: 'done',
+          }
+        }
+        else if(tool.function.name === 'message_reaction') {
+          let { emoji, messageId: messageIdRaw } = args
 
           const messageId = parseInt(messageIdRaw)
           if(isFinite(messageId)) {
@@ -935,11 +926,17 @@ export async function reply(
 
             if(validEmojis.includes(emoji)) {
               reactionsToSend.push({ emoji, messageId, shortExplanation: '' })
-              return { content: 'done' }
+              return {
+                role: 'tool' as const,
+                toolCallId: tool.id,
+                content: 'done',
+              }
             }
             else {
               l.W('Tried to output ', [emoji], ' but it is not allowed')
               return {
+                role: 'tool' as const,
+                toolCallId: tool.id,
                 content: 'Error: pick one of ' + validEmojis.join(', '),
               }
             }
@@ -947,10 +944,14 @@ export async function reply(
           else {
             l.W('Malformed reaction')
             // Don't bother it
-            return { content: 'done' }
+            return {
+              role: 'tool' as const,
+              toolCallId: tool.id,
+              content: 'done',
+            }
           }
         }
-        else if(action.tool === 'search') {
+        else if(tool.function.name === 'search') {
           try {
             l.I('Searching')
 
@@ -971,7 +972,7 @@ export async function reply(
                   },
                   {
                     role: 'user',
-                    content: JSON.stringify({ queries: action.queries }),
+                    content: tool.function.arguments,
                   },
                 ],
               }
@@ -992,25 +993,39 @@ export async function reply(
 
             const content = searchResult.choices[0].message.content
             if(typeof content === 'string') {
-              return { content }
+              return {
+                role: 'tool' as const,
+                toolCallId: tool.id,
+                content,
+              }
             }
             else {
               l.I('Weird content')
-              return { content: 'Error: could not parse returned content' }
+              return {
+                role: 'tool' as const,
+                toolCallId: tool.id,
+                content: 'Error: could not parse content',
+              }
             }
           }
           catch(error) {
             l.E('Search failed: ', [error])
-            return { content: 'Error: ' + (('' + error).split('\n')[0] ?? 'unknown') }
+            return {
+              role: 'tool' as const,
+              toolCallId: tool.id,
+              content: 'Error: ' + (('' + error).split('\n')[0] ?? 'unknown'),
+            }
           }
         }
-        /*
-        NOTE: removed for now
-        else if(action.tool === 'generate_image_attachment') {
+        else if(tool.function.name === 'generate_image_attachment') {
           try {
             l.I('Generating image')
             if(photoToSend !== undefined) {
-              return { content: 'Error: an image is already attached' }
+              return {
+                role: 'tool' as const,
+                toolCallId: tool.id,
+                content: 'Error: an image is already attached',
+              }
             }
 
             const result = await openRouter.chat.send({
@@ -1031,7 +1046,7 @@ export async function reply(
                   },
                   {
                     role: 'user',
-                    content: action.prompt,
+                    content: args.prompt,
                   },
                 ],
               }
@@ -1052,13 +1067,21 @@ export async function reply(
 
             const image = result.choices[0].message.images?.[0]
             if(image === undefined) {
-              return { content: 'Error: could not generate (do not re-generate)' }
+              return {
+                role: 'tool' as const,
+                toolCallId: tool.id,
+                content: 'Error: could not generate (do not re-generate)',
+              }
             }
 
             const url = image.imageUrl.url
             const match = url.match(/^data:(.+?);base64,(.+)$/)
             if(match === null) {
-              return { content: 'Error: could not generate (do not re-generate)' }
+              return {
+                role: 'tool' as const,
+                toolCallId: tool.id,
+                content: 'Error: could not generate (do not re-generate)',
+              }
             }
 
             const mime = match[1]
@@ -1066,25 +1089,42 @@ export async function reply(
             photoToSend = { data, mime }
 
             return {
+              role: 'tool' as const,
+              toolCallId: tool.id,
               content: [
-                { type: 'text' as const, text: 'Image attached:' },
-                { type: 'image_url' as const, imageUrl: { url } },
+                {
+                  type: 'text' as const,
+                  text: 'Image attached:',
+                },
+                {
+                  type: 'image_url' as const,
+                  imageUrl: {
+                    url,
+                  },
+                },
               ],
             }
           }
           catch(error) {
             l.E('Image gen failed: ', [error])
-            return { content: 'Error: ' + (('' + error).split('\n')[0] ?? 'unknown') }
+            return {
+              role: 'tool' as const,
+              toolCallId: tool.id,
+              content: 'Error: ' + (('' + error).split('\n')[0] ?? 'unknown'),
+            }
           }
         }
-        */
-        else if(action.tool === 'take_note') {
-          let { note } = action
+        else if(tool.function.name === 'take_note') {
+          let { note } = args
 
           if(typeof note === 'string' && (note = note.trim())) {
             if(note.length > 200) {
               l.E('Note is too long')
-              return { content: 'Error: note is too long (200 symbols max)' }
+              return {
+                role: 'tool' as const,
+                toolCallId: tool.id,
+                content: 'Error: note is too long (200 symbols max)',
+              }
             }
 
             // NOTE: even though we're running these async, since the body up to this point is sync,
@@ -1093,46 +1133,42 @@ export async function reply(
             // on their own once that message is too old to be picked up by getNotes().
             if(!thisMessageNotes.includes(note)) thisMessageNotes.push(note)
 
-            return { content: 'done' }
+            return {
+              role: 'tool' as const,
+              toolCallId: tool.id,
+              content: 'done',
+            }
           }
           else {
             l.E('Invalid note')
-            return { content: 'Error: note is empty or missing' }
+            return {
+              role: 'tool' as const,
+              toolCallId: tool.id,
+              content: 'Error: note is empty or missing',
+            }
           }
         }
         else {
-          l.W('Unknown tool ', [action])
-          return { content: 'Error: unknown action' }
+          l.W('Unknown tool ', [tool])
+          return {
+            role: 'tool' as const,
+            toolCallId: tool.id,
+            content: 'Error: unknown tool',
+          }
         }
       }))
 
-      const actionResult = stepArguments.actions.map((action, i) => ({ tool: action.tool, ...results[i] }))
-
-      return {
-        role: 'tool' as const,
-        toolCallId: stepCall.id,
-        content: JSON.stringify({ results: actionResult })
-      } satisfies ToolResult
-    })()
-
-    {
-      const toolCallResults: ToolResult[] = []
-      for(let i = 0; i < calls.length; i++) {
-        if(i === 0 && firstToolCallResult !== undefined) {
-          toolCallResults.push(firstToolCallResult)
-        }
-        else {
-          toolCallResults.push({
-            role: 'tool',
-            toolCallId: calls[i].id,
-            content: 'Error: unknown tool call',
-          })
-        }
+      for(const result of results) {
+        openrouterMessages.push(result)
+        thisMessageGeneration.push(result)
       }
-      openrouterMessages.push(...toolCallResults)
-      thisMessageGeneration.push(...toolCallResults)
     }
 
+    if(finishReason === 'length') {
+      log.W('Ran out of tokens')
+      completion.sent = true
+      break
+    }
 
     // Sent after all tools in the batch finished, so that an image generated
     // in the same batch is attached to the text.
@@ -1155,6 +1191,7 @@ export async function reply(
       }))
 
       promises.push((async() => {
+
         const now = Math.floor(T.Now.instant().epochMilliseconds / 1000)
         await updateReactionRows(pool, reactions.map(it => {
           return {
@@ -1178,11 +1215,23 @@ export async function reply(
       })())
     }
 
-
-    if(done) {
-      log.I('Model called done')
+    if(finishReason === 'stop') {
+      log.W('Model stopped without calling tools. Content: ', [response.choices[0].message.content])
       break
     }
+
+    if(finishReason === 'tool_calls') {
+      if(doneCalled) {
+        log.I('Model called done')
+        break
+      }
+
+      log.I('Going to next turn after ', [finishReason])
+      continue
+    }
+
+    log.E('Non-continue finishReason: ', [finishReason], '. Stopping')
+    break
   }
 
   if(photoToSend !== undefined) enqueueReply('')
@@ -1208,6 +1257,11 @@ export async function reply(
   await U.all(promises)
 
   log.I('Done responding')
+}
+
+function isEmptyReply(reply: string) {
+  reply = reply.trim()
+  return reply === '' || reply.length > 4000
 }
 
 type TelegramWrapper<T> = { ok: true, result: T } | { ok: false, description: string }
@@ -1241,92 +1295,107 @@ export async function sendPrompt(
       maxCompletionTokens: 6000,
       provider: {
         dataCollection: 'deny',
-        requireParameters: true,
       },
       reasoning: {
         effort: 'high',
       },
-      toolChoice: {
-        type: 'function',
-        function: { name: 'step' },
-      },
+      toolChoice: 'required',
       tools: [
         {
           type: 'function',
           function: {
-            name: 'step',
-            description: 'Take zero or more actions, then say whether you are finished.',
-            strict: true,
+            name: 'text_reply',
+            description: 'Sends a text message',
             parameters: {
               type: 'object',
               properties: {
-                actions: {
-                  type: 'array',
+                text: { 'type': 'string', 'description': 'The reply text' }
+              },
+              required: ['text'],
+              additionalProperties: false,
+            }
+          },
+        },
+        {
+          type: 'function',
+          function: {
+            name: 'message_reaction',
+            description: 'Adds an emoji reaction to a message',
+            parameters: {
+              type: 'object',
+              properties: {
+                messageId: { type: 'string' },
+                emoji: { type: 'string' },
+              },
+              required: ['emoji', 'messageId'],
+              additionalProperties: false,
+            }
+          },
+        },
+        {
+          type: 'function',
+          function: {
+            name: 'search',
+            description: 'Perform Search/read a URL. **Important**: Will fail without express user consent.',
+            parameters: {
+              type: "object",
+              properties: {
+                queries: {
+                  type: "array",
                   items: {
-                    anyOf: [
-                      {
-                        type: 'object',
-                        description: 'Sends a text message',
-                        properties: {
-                          tool: { const: 'text_reply' },
-                          text: { type: 'string' },
-                        },
-                        required: ['tool', 'text'],
-                        additionalProperties: false,
-                      },
-                      {
-                        type: 'object',
-                        description: 'Adds an emoji reaction to a message',
-                        properties: {
-                          tool: { const: 'message_reaction' },
-                          messageId: { type: 'string' },
-                          emoji: { type: 'string' },
-                        },
-                        required: ['tool', 'messageId', 'emoji'],
-                        additionalProperties: false,
-                      },
-                      {
-                        type: 'object',
-                        description: 'Perform Search/read a URL. **Important**: Will fail without express user consent.',
-                        properties: {
-                          tool: { const: 'search' },
-                          queries: { type: 'array', items: { type: 'string' } },
-                        },
-                        required: ['tool', 'queries'],
-                        additionalProperties: false,
-                      },
-                      /*
-                      {
-                        type: 'object',
-                        description: 'Generates an image and attaches it to the next text_reply (possibly on the next turn).',
-                        properties: {
-                          tool: { const: 'generate_image_attachment' },
-                          prompt: { type: 'string' },
-                        },
-                        required: ['tool', 'prompt'],
-                        additionalProperties: false,
-                      },
-                      */
-                      {
-                        type: 'object',
-                        description: 'Note concicely anything that might be important long-term context. Use sparingly.',
-                        properties: {
-                          tool: { const: 'take_note' },
-                          note: { type: 'string' },
-                        },
-                        required: ['tool', 'note'],
-                        additionalProperties: false,
-                      },
-                    ],
+                    type: "string",
                   },
                 },
-                done: {
-                  type: 'boolean',
-                  description: 'true if no further steps are needed after these actions run; false to continue after seeing their results.'
+              },
+              required: ["queries"],
+              additionalProperties: false,
+            },
+          },
+        },
+        {
+          type: 'function',
+          function: {
+            name: 'generate_image_attachment',
+            description: 'Generates and attaches an image to the reply. Only use when asked by a user',
+            parameters: {
+              type: "object",
+              properties: {
+                prompt: {
+                  type: "string",
                 },
               },
-              required: ['actions', 'done'],
-              additionalProperties: false
+              required: ["prompt"],
+              additionalProperties: false,
+            },
+          },
+        },
+        {
+          type: 'function',
+          function: {
+            name: 'take_note',
+            description: 'Note concicely anything that might be important long-term context. Use sparingly.',
+            parameters: {
+              type: "object",
+              properties: {
+                note: {
+                  type: "string",
+                },
+              },
+              required: ["note"],
+              additionalProperties: false,
+            },
+          },
+        },
+        {
+          type: 'function',
+          function: {
+            name: 'done',
+            description: 'Ends the turn. Call this if you are done or don\'t need results from the tools you called.',
+            parameters: {
+              type: 'object',
+              properties: {},
+              required: [],
+              additionalProperties: false,
             },
           },
         },
@@ -1339,17 +1408,6 @@ export async function sendPrompt(
     }
   })
 }
-
-type StepArguments = {
-  actions: Array<StepAction>
-  done: boolean
-}
-type StepAction
-  = { tool: 'text_reply', text: string }
-  | { tool: 'message_reaction', messageId: string, emoji: string }
-  | { tool: 'search', queries: string[] }
-  //| { tool: 'generate_image_attachment', prompt: string }
-  | { tool: 'take_note', note: string }
 
 /// ???????????
 export type OpenRouterMessage = OpenRouter['chat']['send'] extends (a: { chatRequest: { messages: Array<infer Message> } }) => infer U1 ? Message : never
@@ -1421,8 +1479,6 @@ type ReplyMessageWithAttachments = BaseMessageWithAttachments & {
 }
 
 type AnyMessageWithAttachments = RootMessageWithAttachments | ReplyMessageWithAttachments
-
-type ToolResult = { role: 'tool', toolCallId: string, content: string }
 
 // Number of messages fetchMessages() gives to the model.
 export const contextMessageCount = 20
