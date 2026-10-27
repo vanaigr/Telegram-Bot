@@ -1017,103 +1017,6 @@ export async function reply(
             }
           }
         }
-        else if(tool.function.name === 'generate_image_attachment') {
-          try {
-            l.I('Generating image')
-            if(photoToSend !== undefined) {
-              return {
-                role: 'tool' as const,
-                toolCallId: tool.id,
-                content: 'Error: an image is already attached',
-              }
-            }
-
-            const result = await openRouter.chat.send({
-              chatRequest: {
-                model: 'google/gemini-2.5-flash-image',
-                modalities: ['text', 'image'],
-                imageConfig: {
-                  // because who knows
-                  aspectRatio: '1:1',
-                  aspect_ratio: '1:1',
-                  imageSize: '1K',
-                  image_size: '1K',
-                },
-                messages: [
-                  {
-                    role: 'system',
-                    content: 'Generate an image for the following prompt: ',
-                  },
-                  {
-                    role: 'user',
-                    content: args.prompt,
-                  },
-                ],
-              }
-            })
-            l.I('Done generating image')
-
-            await Db.insertMany(
-              pool,
-              Db.t.responses,
-              Db.omit(Db.d.responses, ['sequenceNumber']),
-              [{
-                respondsToChatId: chatId,
-                respondsToMessageId,
-                raw: JSON.stringify(result),
-              }],
-              {},
-            )
-
-            const image = result.choices[0].message.images?.[0]
-            if(image === undefined) {
-              return {
-                role: 'tool' as const,
-                toolCallId: tool.id,
-                content: 'Error: could not generate (do not re-generate)',
-              }
-            }
-
-            const url = image.imageUrl.url
-            const match = url.match(/^data:(.+?);base64,(.+)$/)
-            if(match === null) {
-              return {
-                role: 'tool' as const,
-                toolCallId: tool.id,
-                content: 'Error: could not generate (do not re-generate)',
-              }
-            }
-
-            const mime = match[1]
-            const data = Buffer.from(match[2], 'base64')
-            photoToSend = { data, mime }
-
-            return {
-              role: 'tool' as const,
-              toolCallId: tool.id,
-              content: [
-                {
-                  type: 'text' as const,
-                  text: 'Image attached:',
-                },
-                {
-                  type: 'image_url' as const,
-                  imageUrl: {
-                    url,
-                  },
-                },
-              ],
-            }
-          }
-          catch(error) {
-            l.E('Image gen failed: ', [error])
-            return {
-              role: 'tool' as const,
-              toolCallId: tool.id,
-              content: 'Error: ' + (('' + error).split('\n')[0] ?? 'unknown'),
-            }
-          }
-        }
         else if(tool.function.name === 'take_note') {
           let { note } = args
 
@@ -1348,23 +1251,6 @@ export async function sendPrompt(
                 },
               },
               required: ["queries"],
-              additionalProperties: false,
-            },
-          },
-        },
-        {
-          type: 'function',
-          function: {
-            name: 'generate_image_attachment',
-            description: 'Generates and attaches an image to the reply. Only use when asked by a user',
-            parameters: {
-              type: "object",
-              properties: {
-                prompt: {
-                  type: "string",
-                },
-              },
-              required: ["prompt"],
               additionalProperties: false,
             },
           },
