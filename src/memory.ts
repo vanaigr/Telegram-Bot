@@ -478,13 +478,12 @@ Return a description for every listed member, identified by userId.
 `.trim() + '\n'
 
 const summaryPrompt = `
-You are given long-term descriptions of the members of a Telegram group chat and the current time. Write a terse summary of what is currently relevant about each member. It will be given to a chat bot so it can make its replies more personal.
+You are given long-term descriptions of the members of a Telegram group chat and the current time. Write a terse summary of what is currently relevant for the chat. It will be given to a chat bot so it can make its replies more personal.
 
-- One short block per member, starting with their name and @username if they have one.
 - Prioritize ongoing and upcoming plans, recent events, current situations, key personality traits and interests, running jokes, and relationships with other members.
 - Skip resolved or stale things unless they define the person.
 - Keep dates for plans and events.
-- Telegraphic style, no filler. At most ~5 short lines per member, fewer for members with little info.
+- Telegraphic style, no filler.
 - Write in English.
 
 Output only the summary.
