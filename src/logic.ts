@@ -692,14 +692,12 @@ export async function reply(
   }
 
   const messages = await fetchMessages(pool, log, chatId)
-  const notes = await getNotes(pool, chatId, messages[0].msg.message_id)
   const respondsToMessage = messages.at(-1)!
   const respondsToMessageId = respondsToMessage.msg.message_id
 
   log.I('Will be responding to ', [respondsToMessageId])
 
   const openrouterMessages: OpenRouterMessage[] = await messagesToModelInput({
-    notes,
     messages,
     chatInfo: await chatInfoP,
     log,
@@ -719,7 +717,6 @@ export async function reply(
   */
 
   let thisMessageGeneration: OpenRouterMessage[] = []
-  let thisMessageNotes: string[] = []
   let photoToSend: { data: Buffer, mime: string } | undefined
 
   const cancelTypingStatus = startTypingTask(chatId, log)
@@ -1068,49 +1065,6 @@ export async function reply(
           }
         }
       }
-      else if(tool.function.name === 'take_note') {
-        let { note } = args
-
-        if(typeof note === 'string' && (note = note.trim())) {
-          if(note.length > 200) {
-            l.E('Note is too long')
-            return {
-              forceContinue: true,
-              tool: {
-                role: 'tool' as const,
-                toolCallId: tool.id,
-                content: 'Error: note is too long (200 symbols max)',
-              },
-            }
-          }
-
-          // NOTE: even though we're running these async, since the body up to this point is sync,
-          // modifications on notes are guaranteed to happen in the right order.
-          // Notes are stored with the message we're responding to, and old ones fall out
-          // on their own once that message is too old to be picked up by getNotes().
-          if(!thisMessageNotes.includes(note)) thisMessageNotes.push(note)
-
-          return {
-            forceContinue: false,
-            tool: {
-              role: 'tool' as const,
-              toolCallId: tool.id,
-              content: 'done',
-            },
-          }
-        }
-        else {
-          l.E('Invalid note')
-          return {
-            forceContinue: true,
-            tool: {
-              role: 'tool' as const,
-              toolCallId: tool.id,
-              content: 'Error: note is empty or missing',
-            },
-          }
-        }
-      }
       else {
         l.W('Unknown tool ', [tool])
         return {
@@ -1188,10 +1142,6 @@ export async function reply(
         ...respondsToMessage.generation,
         ...thisMessageGeneration,
       ]),
-      Db.setJson(Db.t.messages.notes, [
-        ...respondsToMessage.notes,
-        ...thisMessageNotes,
-      ]),
     ]),
     'where', Db.eq(Db.t.messages.chatId, Db.param(BigInt(chatId))),
     'and', Db.eq(Db.t.messages.messageId, Db.param(BigInt(respondsToMessage.msg.message_id))),
@@ -1208,6 +1158,8 @@ type TelegramWrapper<T> = { ok: true, result: T } | { ok: false, description: st
 
 export const systemPrompt = `
 You are a group chat participant, a typical 20-something year old. Your ids are @${botUsername}, ${botName}.
+
+You should only respond to 60% of messages, unless asked to respond.
 `.trim() + '\n'
 
 export async function sendPrompt(
@@ -1305,23 +1257,6 @@ export async function sendPrompt(
             },
           },
         },
-        {
-          type: 'function',
-          function: {
-            name: 'take_note',
-            description: 'Note concicely anything that might be important long-term context. Use sparingly.',
-            parameters: {
-              type: "object",
-              properties: {
-                note: {
-                  type: "string",
-                },
-              },
-              required: ["note"],
-              additionalProperties: false,
-            },
-          },
-        },
       ],
       stream: false,
       messages: [
@@ -1394,7 +1329,6 @@ type RootMessageWithAttachments = BaseMessageWithAttachments & {
   type: 'root'
   from: 'assistant' | 'user' | 'mark'
   generation: OpenRouterMessage[]
-  notes: string[]
   reactions: Reaction[]
 }
 type ReplyMessageWithAttachments = BaseMessageWithAttachments & {
@@ -1405,8 +1339,6 @@ type AnyMessageWithAttachments = RootMessageWithAttachments | ReplyMessageWithAt
 
 // Number of messages fetchMessages() gives to the model.
 export const contextMessageCount = 20
-// Number of notes shown to the model.
-const maxNotes = 10
 
 export async function fetchMessages(
   conn: Db.DbConnOrPool,
@@ -1419,7 +1351,6 @@ export async function fetchMessages(
     'select', [
       t.raw,
       t.generation,
-      t.notes,
       Db.named('from', t.type),
       Db.named(
         'reactions',
@@ -1447,13 +1378,12 @@ export async function fetchMessages(
     return []
   }
 
-  const messages = messagesRaw.map(({ raw: msg, from, generation, notes, reactions }): RootMessageWithAttachments => {
+  const messages = messagesRaw.map(({ raw: msg, from, generation, reactions }): RootMessageWithAttachments => {
     return {
       ...dbMessageToMessageWithAttachments(msg, true),
       type: 'root',
       from,
       generation: generation as OpenRouterMessage[],
-      notes,
       reactions: (reactions ?? []).map((it: any) => {
         return {
           info: it.raw as Types.MessageReactionUpdated,
@@ -1951,11 +1881,8 @@ type LlmMessage = {
 
 export async function messagesToModelInput(
   {
-    //summaries,
-    notes, messages, log, chatInfo, caching,
+    messages, log, chatInfo, caching,
   }: {
-    //summaries: string[],
-    notes: string[],
     messages: AnyMessageWithAttachments[],
     chatInfo: Types.ChatFullInfo | undefined,
     log: L.Log
@@ -1963,26 +1890,6 @@ export async function messagesToModelInput(
   }
 ): Promise<OpenRouterMessage[]> {
   const openrouterMessages: OpenRouterMessage[] = []
-
-  openrouterMessages.push({
-    role: 'system',
-    content: [
-      {
-        type: 'text',
-        text: '<notes>\n',
-      },
-      ...[
-        'I should only respond to 60% of messages, unless I\'m asked to respond',
-        ...notes,
-      ].map(it => {
-        return { type: 'text' as const, text: '<note>' + it + '</note>\n' }
-      }),
-      {
-        type: 'text',
-        text: '</notes>\n',
-      },
-    ]
-  })
 
   if(chatInfo) {
     openrouterMessages.push({
@@ -3246,50 +3153,6 @@ function formatDurationSec(value: number): string {
   return sign + Math.floor(value /  60 / 60)
     + ':' + (Math.floor(value / 60) % 60).toString().padStart(2, '0')
     + ':' + (Math.floor(value) % 60).toString().padStart(2, '0')
-}
-
-// Notes of the messages that are still in the context don't need to be repeated -
-// the model sees the `take_note` calls in their generations. So we only collect
-// the ones that were taken before `beforeMessageId` (the first message that is
-// outside the context).
-export async function getNotes(
-  db: Db.DbConnOrPool,
-  chatId: number,
-  beforeMessageId: number | bigint,
-) {
-  const t = Db.t.messages
-  // Most messages have no notes at all, and the ones that do almost always have
-  // exactly 1, so `maxNotes` messages are enough to fill the list.
-  // 2 is added in case some of the messages are duplicates (i.e. preserving a note that is about to fall
-  // out of context, though it doesn't look like the bot ever used that).
-  const rows = await Db.query(db,
-    'select', [t.notes],
-    'from', t,
-    'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
-    'and', t.messageId, '<', Db.param(BigInt(beforeMessageId)),
-    // Matches idx__messages__chatId_messageId_notes
-    'and', Db.func('jsonb_array_length', t.notes), '> 0',
-    'order by', t.messageId, 'desc',
-    'limit ' + (maxNotes + 2),
-  )
-
-  // Scanning backwards, so the most recent copy of a repeated note is the one
-  // that is kept. Reversed at the end to go back to oldest-first.
-  const notes: string[] = []
-  const seen = new Set<string>()
-  for(const row of rows) {
-    for(let i = row.notes.length - 1; i >= 0; i--) {
-      const note = row.notes[i]
-      if(seen.has(note)) continue
-      seen.add(note)
-      notes.push(note)
-      if(notes.length >= maxNotes) break
-    }
-    if(notes.length >= maxNotes) break
-  }
-  notes.reverse()
-
-  return notes
 }
 
 // Id of the oldest message that fetchMessages() still returns, or undefined if

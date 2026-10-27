@@ -194,19 +194,6 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
 
       return new Response()
     }
-    else if(messageText.startsWith('/notes')) {
-      log.I('Requested notes')
-
-      const contextStart = await Logic.getContextStartMessageId(pool, message.chat.id)
-      const notes = contextStart === undefined
-        ? []
-        : await Logic.getNotes(pool, message.chat.id, contextStart)
-      const text = notes.map((it, i) => (1 + i) + '. ' + it).join('\n')
-
-      await Logic.sendMessage(message.chat.id, { text, entities: [] }, log)
-
-      return new Response()
-    }
   }
 
   await Db.timedTran(pool, async(db) => {
