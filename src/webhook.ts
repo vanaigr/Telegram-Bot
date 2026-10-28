@@ -209,6 +209,22 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
 
       return new Response()
     }
+    else if(/^\/instructions(@balbes52_bot)?(\s|$)/.test(messageText)) {
+      log.I('Received instructions command')
+
+      const instructions = messageText.replace(/^\/instructions(@balbes52_bot)?/, '').trim()
+
+      const t = Db.t.chatWhitelist
+      await Db.queryRaw(pool,
+        'update', t,
+        'set', Db.set(t.instructions, Db.param(instructions)),
+        'where', Db.eq(t.id, Db.param(BigInt(message.chat.id))),
+      )
+
+      await Logic.setMessageReaction(message.chat.id, message.message_id, '👍', log)
+
+      return new Response()
+    }
     else if(/^\/model(@balbes52_bot)?(\s|$)/.test(messageText)) {
       log.I('Received model command')
 
@@ -341,6 +357,7 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
             Logic.fromMessageDate(message.date),
             message.chat.id,
             whitelistInfo.memoryEnabled,
+            whitelistInfo.instructions,
             completion
           )
         })
@@ -373,7 +390,12 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
 
 async function getChatWhitelistInfo(pool: Db.DbPool, log: L.Log, chatId: number) {
   const whitelistInfo = await Db.query(pool,
-    'select', [Db.t.chatWhitelist.id, Db.t.chatWhitelist.enabled, Db.t.chatWhitelist.memoryEnabled],
+    'select', [
+      Db.t.chatWhitelist.id,
+      Db.t.chatWhitelist.enabled,
+      Db.t.chatWhitelist.memoryEnabled,
+      Db.t.chatWhitelist.instructions,
+    ],
     'from', Db.t.chatWhitelist,
     'where', Db.eq(Db.t.chatWhitelist.id, Db.param(BigInt(chatId))),
   ).then(it => it.at(0))

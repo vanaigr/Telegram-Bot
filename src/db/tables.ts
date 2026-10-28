@@ -133,6 +133,7 @@ export const tables = {
         "id": t_bigint,
         "enabled": t_boolean,
         "memoryEnabled": t_boolean,
+        "instructions": t_text,
     },
     "debug": {
         "sequenceNumber": t_integer,

@@ -498,6 +498,7 @@ export async function reply(
   messageDate: T.Instant,
   chatId: number,
   memoryEnabled: boolean,
+  instructions: string,
   completion: { sent: boolean },
 ) {
   const chatInfoP = getChatFullInfo(pool, log, chatId)
@@ -846,7 +847,7 @@ export async function reply(
       let remainingRetries = 3
       while(remainingRetries > 0) {
         try {
-          response = await sendPrompt(openRouter, openrouterMessages, systemPrompt)
+          response = await sendPrompt(openRouter, openrouterMessages, systemPrompt(instructions))
           break
         }
         catch(error) {
@@ -1172,11 +1173,15 @@ export async function reply(
 
 type TelegramWrapper<T> = { ok: true, result: T } | { ok: false, description: string }
 
-export const systemPrompt = `
+export const defaultInstructions = 'You should only respond to a third of the messages, unless asked to respond. **MESSAGES MUST BE SHORT**.'
+
+export function systemPrompt(instructions: string) {
+  return `
 You are a group chat participant, a typical 20-something year old. Your ids are @${botUsername}, ${botName}.
 
-You should only respond to a third of the messages, unless asked to respond. **MESSAGES MUST BE SHORT**.
+${instructions || defaultInstructions}
 `.trim() + '\n'
+}
 
 export async function sendPrompt(
   openRouter: OpenRouter,

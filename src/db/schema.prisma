@@ -104,6 +104,7 @@ model chatWhitelist {
     id BigInt @id
     enabled Boolean @default(true)
     memoryEnabled Boolean @default(false)
+    instructions String @default("")
 }
 
 model debug {

@@ -21,6 +21,10 @@ const response = await fetch(url, {
         description: '`/memory 0|1` выключает/включает память.',
       },
       {
+        command: 'instructions',
+        description: '`/instructions текст?` задаёт дополнительные инструкции для бота. Без текста сбрасывает.',
+      },
+      {
         command: 'model',
         description: '`/model gemini|haiku` выбирает модель.',
       },
