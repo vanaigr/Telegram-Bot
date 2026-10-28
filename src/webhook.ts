@@ -225,27 +225,6 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
 
       return new Response()
     }
-    else if(/^\/model(@balbes52_bot)?(\s|$)/.test(messageText)) {
-      log.I('Received model command')
-
-      const arg = messageText.match(/^\/model(@balbes52_bot)?\s+(gemini|haiku)\s*$/)?.[2]
-      if(arg === undefined) {
-        log.I('Invalid model command argument')
-        await Logic.setMessageReaction(message.chat.id, message.message_id, '🤷', log)
-        return new Response()
-      }
-
-      const t = Db.t.chatWhitelist
-      await Db.queryRaw(pool,
-        'update', t,
-        'set', Db.set(t.useHaiku, Db.param(arg === 'haiku')),
-        'where', Db.eq(t.id, Db.param(BigInt(message.chat.id))),
-      )
-
-      await Logic.setMessageReaction(message.chat.id, message.message_id, '👍', log)
-
-      return new Response()
-    }
     else if(messageText.startsWith('/whisper') || messageText.startsWith('/w ')) {
       log.I('Ignoring since /whisper')
 
