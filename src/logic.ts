@@ -498,6 +498,7 @@ export async function reply(
   messageDate: T.Instant,
   chatId: number,
   memoryEnabled: boolean,
+  useHaiku: boolean,
   completion: { sent: boolean },
 ) {
   const chatInfoP = getChatFullInfo(pool, log, chatId)
@@ -846,7 +847,7 @@ export async function reply(
       let remainingRetries = 3
       while(remainingRetries > 0) {
         try {
-          response = await sendPrompt(openRouter, openrouterMessages, systemPrompt)
+          response = await sendPrompt(openRouter, openrouterMessages, systemPrompt, useHaiku)
           break
         }
         catch(error) {
@@ -1182,6 +1183,7 @@ export async function sendPrompt(
   openRouter: OpenRouter,
   messages: OpenRouterMessage[],
   systemPrompt: string,
+  useHaiku: boolean,
 ) {
   return await openRouter.chat.send({
     chatRequest: {
@@ -1189,7 +1191,7 @@ export async function sendPrompt(
       // 4. Gets stuck in message patterns. I.e. uses the same word or response format in every response even if told not to.
       // try again. Maybe seeing its own reasoning helps it not explode.
       // No, but it's still better than other options
-      model: 'google/gemini-3-flash-preview',
+      model: useHaiku ? 'anthropic/claude-haiku-5.5' : 'google/gemini-3-flash-preview',
 
       // Bad, does thinking outside thinking blocks.
       //model: 'google/gemini-3.5-flash-lite',
