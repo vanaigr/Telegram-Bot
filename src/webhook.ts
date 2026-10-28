@@ -341,7 +341,6 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
             Logic.fromMessageDate(message.date),
             message.chat.id,
             whitelistInfo.memoryEnabled,
-            whitelistInfo.useHaiku,
             completion
           )
         })
@@ -374,7 +373,7 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
 
 async function getChatWhitelistInfo(pool: Db.DbPool, log: L.Log, chatId: number) {
   const whitelistInfo = await Db.query(pool,
-    'select', [Db.t.chatWhitelist.id, Db.t.chatWhitelist.enabled, Db.t.chatWhitelist.memoryEnabled, Db.t.chatWhitelist.useHaiku],
+    'select', [Db.t.chatWhitelist.id, Db.t.chatWhitelist.enabled, Db.t.chatWhitelist.memoryEnabled],
     'from', Db.t.chatWhitelist,
     'where', Db.eq(Db.t.chatWhitelist.id, Db.param(BigInt(chatId))),
   ).then(it => it.at(0))

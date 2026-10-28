@@ -133,7 +133,6 @@ export const tables = {
         "id": t_bigint,
         "enabled": t_boolean,
         "memoryEnabled": t_boolean,
-        "useHaiku": t_boolean,
     },
     "debug": {
         "sequenceNumber": t_integer,

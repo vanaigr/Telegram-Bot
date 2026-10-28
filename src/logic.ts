@@ -498,7 +498,6 @@ export async function reply(
   messageDate: T.Instant,
   chatId: number,
   memoryEnabled: boolean,
-  useHaiku: boolean,
   completion: { sent: boolean },
 ) {
   const chatInfoP = getChatFullInfo(pool, log, chatId)
@@ -847,7 +846,7 @@ export async function reply(
       let remainingRetries = 3
       while(remainingRetries > 0) {
         try {
-          response = await sendPrompt(openRouter, openrouterMessages, systemPrompt, useHaiku)
+          response = await sendPrompt(openRouter, openrouterMessages, systemPrompt)
           break
         }
         catch(error) {
@@ -1176,14 +1175,13 @@ type TelegramWrapper<T> = { ok: true, result: T } | { ok: false, description: st
 export const systemPrompt = `
 You are a group chat participant, a typical 20-something year old. Your ids are @${botUsername}, ${botName}.
 
-You should only respond to 60% of messages, unless asked to respond.
+You should only respond to a third of the messages, unless asked to respond. **MESSAGES MUST BE SHORT**.
 `.trim() + '\n'
 
 export async function sendPrompt(
   openRouter: OpenRouter,
   messages: OpenRouterMessage[],
   systemPrompt: string,
-  useHaiku: boolean,
 ) {
   return await openRouter.chat.send({
     chatRequest: {
@@ -1191,7 +1189,9 @@ export async function sendPrompt(
       // 4. Gets stuck in message patterns. I.e. uses the same word or response format in every response even if told not to.
       // try again. Maybe seeing its own reasoning helps it not explode.
       // No, but it's still better than other options
-      model: useHaiku ? 'anthropic/claude-haiku-5.5' : 'google/gemini-3-flash-preview',
+      //model: 'google/gemini-3-flash-preview',
+
+      model: 'google/gemini-3.6-flash',
 
       // Bad, does thinking outside thinking blocks.
       //model: 'google/gemini-3.5-flash-lite',

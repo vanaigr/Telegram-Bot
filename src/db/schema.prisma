@@ -104,7 +104,6 @@ model chatWhitelist {
     id BigInt @id
     enabled Boolean @default(true)
     memoryEnabled Boolean @default(false)
-    useHaiku Boolean @default(false)
 }
 
 model debug {
