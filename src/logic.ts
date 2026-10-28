@@ -497,10 +497,11 @@ export async function reply(
   log: L.Log,
   messageDate: T.Instant,
   chatId: number,
+  memoryEnabled: boolean,
   completion: { sent: boolean },
 ) {
   const chatInfoP = getChatFullInfo(pool, log, chatId)
-  const memorySummaryP = getMemorySummary(pool, log, chatId)
+  const memorySummaryP = memoryEnabled ? getMemorySummary(pool, log, chatId) : undefined
 
   log.I('Locking ', [chatId])
   try {

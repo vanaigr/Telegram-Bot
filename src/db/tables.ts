@@ -132,6 +132,7 @@ export const tables = {
     "chatWhitelist": {
         "id": t_bigint,
         "enabled": t_boolean,
+        "memoryEnabled": t_boolean,
     },
     "debug": {
         "sequenceNumber": t_integer,

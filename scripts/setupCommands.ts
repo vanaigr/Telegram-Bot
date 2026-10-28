@@ -17,6 +17,10 @@ const response = await fetch(url, {
         description: 'Выключает автоматические сообщения.',
       },
       {
+        command: 'memory',
+        description: '`/memory 0|1` выключает/включает память.',
+      },
+      {
         command: 'whisper',
         description: 'Прячет сообщение от бота.',
       },

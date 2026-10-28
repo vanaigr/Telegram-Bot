@@ -188,6 +188,27 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
 
       return new Response()
     }
+    else if(/^\/memory(@balbes52_bot)?(\s|$)/.test(messageText)) {
+      log.I('Received memory command')
+
+      const arg = messageText.match(/^\/memory(@balbes52_bot)?\s+([01])\s*$/)?.[2]
+      if(arg === undefined) {
+        log.I('Invalid memory command argument')
+        await Logic.setMessageReaction(message.chat.id, message.message_id, '🤷', log)
+        return new Response()
+      }
+
+      const t = Db.t.chatWhitelist
+      await Db.queryRaw(pool,
+        'update', t,
+        'set', Db.set(t.memoryEnabled, Db.param(arg === '1')),
+        'where', Db.eq(t.id, Db.param(BigInt(message.chat.id))),
+      )
+
+      await Logic.setMessageReaction(message.chat.id, message.message_id, '👍', log)
+
+      return new Response()
+    }
     else if(messageText.startsWith('/whisper') || messageText.startsWith('/w ')) {
       log.I('Ignoring since /whisper')
 
@@ -298,6 +319,7 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
             l,
             Logic.fromMessageDate(message.date),
             message.chat.id,
+            whitelistInfo.memoryEnabled,
             completion
           )
         })
@@ -314,7 +336,7 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
   })()
   waitUntil(replyTask)
 
-  if(botEnabled && !edit) {
+  if(botEnabled && !edit && whitelistInfo.memoryEnabled) {
     waitUntil((async() => {
       try {
         await Memory.updateMemory(pool, log, message.chat.id)
@@ -330,7 +352,7 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
 
 async function getChatWhitelistInfo(pool: Db.DbPool, log: L.Log, chatId: number) {
   const whitelistInfo = await Db.query(pool,
-    'select', [Db.t.chatWhitelist.id, Db.t.chatWhitelist.enabled],
+    'select', [Db.t.chatWhitelist.id, Db.t.chatWhitelist.enabled, Db.t.chatWhitelist.memoryEnabled],
     'from', Db.t.chatWhitelist,
     'where', Db.eq(Db.t.chatWhitelist.id, Db.param(BigInt(chatId))),
   ).then(it => it.at(0))

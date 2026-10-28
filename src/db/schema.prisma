@@ -103,6 +103,7 @@ model chatLocks {
 model chatWhitelist {
     id BigInt @id
     enabled Boolean @default(true)
+    memoryEnabled Boolean @default(false)
 }
 
 model debug {
