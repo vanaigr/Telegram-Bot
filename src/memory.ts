@@ -322,8 +322,7 @@ async function generateSummary(
         { role: 'system', content: summaryPrompt },
         {
           role: 'user',
-          content: 'Current time: ' + Logic.dateToString(now) + '\n\n'
-            + 'Chat members:\n'
+          content: 'Chat members:\n'
             + JSON.stringify(Object.entries(latest.users).map(([userId, it]) => ({ userId, ...it })), undefined, 2),
         },
       ],
@@ -453,38 +452,39 @@ const descriptionsPrompt = `
 You maintain long-term memory about the members of a Telegram group chat.
 
 You are given:
-1. The chat members with their current descriptions (empty for members you haven't seen before).
-2. The next batch of chat messages in chronological order. Each message starts with a "--- message from ... ---" header with the sender's user id, followed by the message content and then its metadata (sender, message id, time). Replies and forwards are quoted with "> ".
+1. The chat members with their current descriptions.
+2. The next batch of chat messages. Each message starts with a "--- message from ... ---" header with the sender's user id, followed by the message content and then its metadata (sender, message id, time). Replies and forwards are prefixed with "> ".
 
-Update the description of every listed member using the new messages. A description tracks the member across the entire chat history:
+Update the description of the members using the new messages. A description tracks the member across the entire chat history:
 - Facts: name, age, location, job/study, family, relationships, pets, hobbies, possessions, health, etc.
 - Personality: interests, opinions, sense of humor, how they talk, how they treat others.
 - Relationships with other chat members.
-- Important plans, intentions and ongoing situations, with dates. When the outcome of a plan becomes known, keep the plan and record the result (e.g. "planned driving exam on 2026-03-02 — failed, retaking in April").
+- *Important* plans, intentions and ongoing situations, with dates. When the outcome of a plan becomes known, keep the plan and record the result (e.g. "planned driving exam on 2026-03-02 — failed, retaking in April").
 - Notable events that happened to them, with dates.
 
 Rules:
+- Do not record everyday stuff and anything that would not be important long-term.
 - Keep important stuff from the previous description. Integrate new information instead of appending duplicates. Mark information that is no longer true as past instead of deleting it (e.g. "worked at X until 2026-05").
 - Prune random information that is no longer relevant (like who ate what a month ago).
 - Use absolute dates based on message timestamps, never "yesterday" or "recently".
-- Only record what the messages support. Distinguish jokes, sarcasm and banter from sincere statements; note uncertainty when unsure.
-- Attachments (photos, video thumbnails) from members and from the bot may contain relevant information.
+- Only record what the messages support.
 - Messages from the bot (${botIds}) are context only. Do not create a description for the bot, and do not record what the bot says as facts about members. The bot's replies should not be summarized.
 - If the new messages add nothing about a member, don't update their description.
-- Write in English, in terse note style, organized by topic.
+- Write in English, in terse note style.
 
 Return a description for every listed member, identified by userId.
 
 `.trim() + '\n'
 
 const summaryPrompt = `
-You are given long-term descriptions of the members of a Telegram group chat and the current time. Write a terse summary of what is currently relevant for the chat. It will be given to a chat bot so it can make its replies more personal.
+You are given long-term descriptions of the members of a Telegram group chat. Write a terse summary (one paragraph) of relevant info about active chat members.
 
-- Prioritize ongoing and upcoming plans, recent events, current situations, key personality traits and interests, running jokes, and relationships with other members.
+- Prioritize ongoing and upcoming plans, key personality traits and interests.
 - Skip resolved or stale things unless they define the person.
-- Keep dates for plans and events.
+- Keep dates and times for plans and events.
 - Telegraphic style, no filler.
-- Write in English.
 
-Output only the summary.
+Add a couple of potential topics the bot can discuss (e.g. questions to ask).
+
+Write in English. Output only the summary.
 `.trim() + '\n'
