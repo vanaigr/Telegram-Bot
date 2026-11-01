@@ -316,7 +316,12 @@ async function generateSummary(
     chatRequest: {
       model: memoryModel,
       maxCompletionTokens: 4000,
-      provider: { dataCollection: 'deny' },
+      provider: {
+        dataCollection: 'deny',
+      },
+      reasoning: {
+        effort: 'medium',
+      },
       stream: false,
       messages: [
         { role: 'system', content: summaryPrompt },
@@ -449,31 +454,47 @@ async function fetchChunk(
 const botIds = `${Logic.botName}, @${Logic.botUsername}`
 
 const descriptionsPrompt = `
-You maintain long-term memory about the members of a Telegram group chat.
+You maintain long-term memory about the members of a Telegram group chat. These descriptions are read later so the bot knows who each person is — like the notes a friend would keep in their head, not a diary or chat log.
 
 You are given:
 1. The chat members with their current descriptions.
-2. The next batch of chat messages. Each message starts with a "--- message from ... ---" header with the sender's user id, followed by the message content and then its metadata (sender, message id, time). Replies and forwards are prefixed with "> ".
+2. The next batch of historic chat messages. Each message starts with a "--- message from ... ---" header with the sender's user id, followed by the message content and then its metadata. Replies and forwards are prefixed with "> ".
 
-Update the description of the members using the new messages. A description tracks the member across the entire chat history:
-- Facts: name, age, location, job/study, family, relationships, pets, hobbies, possessions, health, etc.
-- Personality: interests, opinions, sense of humor, how they talk, how they treat others.
-- Relationships with other chat members.
-- *Important* plans, intentions and ongoing situations, with dates. When the outcome of a plan becomes known, keep the plan and record the result (e.g. "planned driving exam on 2026-03-02 — failed, retaking in April").
-- Notable events that happened to them, with dates.
+## The test for every line
+Before writing or keeping any line, ask: "Would this still matter, or change how someone talks to this person, 3 months from now?"
+If no, it does not go in. Most messages in most batches contain nothing that passes this test. That is normal and expected.
 
-Rules:
-- Do not record everyday stuff and anything that would not be important long-term.
-- Keep important stuff from the previous description. Integrate new information instead of appending duplicates. Mark information that is no longer true as past instead of deleting it (e.g. "worked at X until 2026-05").
-- Prune random information that is no longer relevant (like who ate what a month ago).
+## What belongs
+- Stable facts: name, age, location, job/study, family, partner, pets, health conditions, notable possessions (car, house), languages.
+- Durable traits: recurring interests and hobbies, strong or repeated opinions, sense of humor, how they talk, how they treat others. Only record a trait if it shows up repeatedly or strongly — not from one passing remark.
+- Significant plans and ongoing situations with real consequences (moving, job change, exams, pregnancy, wedding, surgery, big trips, breakups). Include dates. When the outcome becomes known, keep the plan and add the result.
+- Life events: things that changed their life (new job, graduated, got a dog, had a baby, moved city). Include dates.
+
+## What does NOT belong (never record these)
+- What someone talked about, asked, shared, joked about or reacted to. A conversation topic is not a fact about a person.
+- Weather, meals, daily moods, small purchases, links/memes/videos shared, games played once, being tired/busy/sick for a day.
+- Short-lived plans (going to the gym tonight, ordering pizza, watching a movie this weekend).
+- Summaries of discussions or arguments, unless they reveal a durable opinion — then record the opinion, not the discussion.
+
+Bad → good examples:
+- "Talked about weather on 2026-05-01" → (nothing)
+- "Shared a meme about cats on 2026-04-12" → (nothing)
+- "Discussed politics with Anna on 2026-03-03" → "Strongly pro-EU; argues about politics often"
+- "Said on 2026-02-10 he's going to the dentist" → (nothing)
+- "Mentioned on 2026-02-10 he's been at Google for 3 years" → "Works at Google (since ~2023)"
+- "On 2026-06-01 said she's moving to Berlin in August" → "Planning move to Berlin, Aug 2026"
+
+## Rules
+- Integrate new info into the existing description; don't append duplicates. Mark info that is no longer true as past ("worked at X until 2026-05") rather than deleting it.
+- Remove any existing lines that fail the 3-month test, even if they were in the previous description.
+- Dates are only for plans, situations and life events — never for conversations.
 - Use absolute dates based on message timestamps, never "yesterday" or "recently".
 - Only record what the messages support.
-- Messages from the bot (${botIds}) are context only. Do not create a description for the bot, and do not record what the bot says as facts about members. The bot's replies should not be summarized.
-- If the new messages add nothing about a member, don't update their description.
+- Messages from the bot (${botIds}) are context only. Do not create a description for the bot, do not record what the bot says as facts about members, and do not summarize the bot's replies.
 - Write in English, in terse note style.
 
-Return a description for every listed member, identified by userId.
-
+## Output
+Return an entry for every listed member, identified by userId. If the batch adds nothing that passes the test for a member, return their description unchanged. Returning it unchanged is the correct and common outcome, not a failure.
 `.trim() + '\n'
 
 const summaryPrompt = `
