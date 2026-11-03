@@ -161,7 +161,7 @@ async function generateMemory(
     transcript.push({ type: 'text', text: `\n--- message from ${sender} ---\n` })
 
     const output: Logic.OpenRouterMessage[] = []
-    await Logic.messageToModelInput(message, false, false, output, log)
+    await Logic.messageToModelInput(message, { showFullGeneration: false, hideSender: true }, output, log)
     for(const it of output) {
       if(typeof it.content === 'string') transcript.push({ type: 'text', text: it.content })
       else if(Array.isArray(it.content)) transcript.push(...it.content as Logic.ChatContentItems[])

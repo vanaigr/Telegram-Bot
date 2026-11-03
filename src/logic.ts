@@ -1964,8 +1964,7 @@ export async function messagesToModelInput(
     const message = messages[i]
     await messageToModelInput(
       message,
-      i >= showFullGenerationBeginI,
-      false,
+      { showFullGeneration: i >= showFullGenerationBeginI },
       openrouterMessages,
       log,
     )
@@ -2024,13 +2023,21 @@ type AllowedMessage = { role: 'assistant', content: ChatContentItems[] }
   | { role: 'user', content: ChatContentItems[] }
   | { role: 'system', content: ChatContentText[] }
 
+export type MessageToModelInputOptions = {
+  showFullGeneration: boolean
+  actuallyNoItsForwardedTelegramApiDesignIsBeautiful?: boolean
+  hideSender?: boolean
+}
+
 export async function messageToModelInput(
   message: AnyMessageWithAttachments,
-  showFullGeneration: boolean,
-  actuallyNoItsForwardedTelegramApiDesignIsBeautiful: boolean,
+  options: MessageToModelInputOptions,
   _output: OpenRouterMessage[],
   log: L.Log,
 ) {
+  const showFullGeneration = options.showFullGeneration
+  const actuallyNoItsForwardedTelegramApiDesignIsBeautiful = options.actuallyNoItsForwardedTelegramApiDesignIsBeautiful ?? false
+
   const addContent = (content: AllowedMessage) => _output.push(content)
 
   const { msg, photos, voice, video, videoNote, stickers/*, reactions*/, linkInfos } = message
@@ -2041,13 +2048,18 @@ export async function messageToModelInput(
       type: 'text',
       text: actuallyNoItsForwardedTelegramApiDesignIsBeautiful
         ? forwardedMessageMetadata(msg)
-        : messageMetadata(msg),
+        : messageMetadata(msg, !(options.hideSender ?? false)),
     }],
   }
 
   if(!actuallyNoItsForwardedTelegramApiDesignIsBeautiful && message.msg.forward_origin) {
     await quote(_output, 'user', async() => {
-      await messageToModelInput(message, false, true, _output, log)
+      await messageToModelInput(
+        message,
+        { showFullGeneration: false, actuallyNoItsForwardedTelegramApiDesignIsBeautiful: true, hideSender: options.hideSender },
+        _output,
+        log,
+      )
     })
     addContent(metadataObject)
     if(message.type === 'root' && showFullGeneration) {
@@ -2108,8 +2120,7 @@ export async function messageToModelInput(
         // NOTE: if the reply is a user message, we shouldn't show the following generation.
         // If it is a bot message, we can't show the full generation (because we don't have it
         // in that message, and because the message itself then wouldn't be shown)
-        false,
-        false,
+        { showFullGeneration: false },
         _output,
         log,
       )
@@ -2429,19 +2440,19 @@ export function forwardedMessageMetadata(
 
   const from = msg.forward_origin!
   if(from.type === 'user') {
-    headers += '- Sent by: ' + userToString(from.sender_user, undefined, true) + '\n'
+    headers += '\n--- message from ' + userToString(from.sender_user, undefined, true) + ' ---\n'
   }
   else if(from.type === 'hidden_user') {
-    headers += '- Sent by: ' + from.sender_user_name + '\n'
+    headers += '\n--- message from ' + from.sender_user_name + ' ---\n'
   }
   else if(from.type === 'chat') {
-    headers += '- Sent by: ' + userToString(undefined, from.sender_chat, true) + '\n'
+    headers += '\n--- message from ' + userToString(undefined, from.sender_chat, true) + ' ---\n'
   }
   else if(from.type === 'channel') {
-    headers += '- Sent by: ' + userToString(undefined, from.chat, true) + '\n'
+    headers += '\n--- message from ' + userToString(undefined, from.chat, true) + ' ---\n'
   }
   else {
-    headers += '- Sent by: ' + userToString(undefined, undefined, true) + '\n'
+    headers += '\n--- message from ' + userToString(undefined, undefined, true) + ' ---\n'
   }
 
   headers += '- At: ' + dateToString(fromMessageDate(from.date)) + '\n'
@@ -2451,9 +2462,14 @@ export function forwardedMessageMetadata(
 
 export function messageMetadata(
   msg: Types.Message,
+  showSender: boolean,
 ) {
+
   let headers = ''
-  headers += '- Sent by: ' + userToString(msg.from, msg.sender_chat, true) + '\n'
+
+  if(showSender) {
+    headers += '\n--- message from ' + userToString(msg.from, msg.sender_chat, true) + ' ---\n'
+  }
   headers += '- messageId: ' + msg.message_id + '\n'
   headers += '- At: ' + dateToString(fromMessageDate(msg.date)) + '\n'
   /*
@@ -2534,10 +2550,10 @@ export function userToString(
 
 export function dateToString(date: T.Instant) {
   const dt = date.toZonedDateTimeISO('Europe/Moscow').toPlainDateTime()
-  return dt.toLocaleString(undefined, { weekday: 'short' })
+  return dt.toLocaleString('en-US', { weekday: 'short' })
     + ' '
-    + dt.toString().replace('T', ' ')
-    + ' +3'
+    + dt.toString()
+    + '+3'
 }
 
 function startTypingTask(chatId: number, log: L.Log) {
