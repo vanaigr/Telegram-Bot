@@ -2009,16 +2009,19 @@ export async function messagesToModelInput(
   const messageSubsetBeginI = Math.max(messages.findLastIndex(it => it.msg.text?.startsWith('/amnesia')), 0)
 
   openrouterMessages.push({
-    role: 'user',
-    content: [{
-      type: 'text',
-      text: JSON.stringify({
-        chatTitle: chatInfo?.title ?? null,
-        chatDescription: chatInfo?.description ?? null,
-        users: chatInfo?.active_usernames?.map(it => '@' + it),
-        userNames: collectUserNames(messages.slice(messageSubsetBeginI)),
-      }),
-    }],
+    role: 'system',
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          chatTitle: chatInfo?.title ?? null,
+          chatDescription: chatInfo?.description ?? null,
+          users: chatInfo?.active_usernames?.map(it => '@' + it),
+          userNames: collectUserNames(messages.slice(messageSubsetBeginI)),
+        }),
+      },
+      { type: 'text', text: '\n' }
+    ],
   })
 
   if(memorySummary) {
@@ -2193,34 +2196,43 @@ export async function messageToModelInput(
   if(msg.new_chat_title !== undefined) {
     addContent({
       role: 'user',
-      content: [{
-        type: 'text',
-        text: JSON.stringify({ newChatTitle: msg.new_chat_title }),
-      }],
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({ newChatTitle: msg.new_chat_title }),
+        },
+        { type: 'text', text: '\n' },
+      ],
     })
     return
   }
   else if(msg.new_chat_members !== undefined) {
     addContent({
       role: 'user',
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          newChatMembers: msg.new_chat_members.map(it => userPartsToUsername(userToParts(it, undefined))),
-        }),
-      }],
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            newChatMembers: msg.new_chat_members.map(it => userPartsToUsername(userToParts(it, undefined))),
+          }),
+        },
+        { type: 'text', text: '\n' },
+      ],
     })
     return
   }
   else if(msg.left_chat_member !== undefined) {
     addContent({
       role: 'user',
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          leftChatMember: userPartsToUsername(userToParts(msg.left_chat_member, undefined)),
-        }),
-      }],
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({
+            leftChatMember: userPartsToUsername(userToParts(msg.left_chat_member, undefined)),
+          }),
+        },
+        { type: 'text', text: '\n' },
+      ],
     })
     return
   }
@@ -2228,6 +2240,8 @@ export async function messageToModelInput(
   const isBotMessage = isMessageFromBot(message.msg)
 
   if(showFullGeneration && isBotMessage && !(message.type === 'root' && message.from === 'mark')) return
+
+  addContent(metadataObject)
 
   const role = isBotMessage ? 'assistant' as const : 'user' as const
 
@@ -2247,118 +2261,157 @@ export async function messageToModelInput(
     })
   }
 
-  const content: ChatContentItems[] = []
-  content.push({ type: 'text', text: messageText(msg, log) })
+  addContent({
+    role,
+    content: await (async() => {
+      const content: ChatContentItems[] = []
 
-  for(const photo of photos) {
-    content.push(await photoToMessagePart(log, photo, '<image not loaded>'))
-  }
-  if(video) {
-    content.push({
-      type: 'text',
-      text: '<Video '
-        + (video.info.file_name ?? 'no name')
-        + ', '
-        + formatDurationSec(video.info.duration)
-        + ' not loaded>\nThumbnail: '
-    })
-    if(video.thumbnail) {
-      content.push(await photoToMessagePart(
-        log,
-        video.thumbnail,
-        '<thumbnail not loaded>',
-      ))
-    }
-  }
-  if(videoNote) {
-    content.push({
-      type: 'text',
-      text: `<Circular video, ${formatDurationSec(videoNote.info.duration)}>\nThumbnail: `
-    })
-    if(videoNote.thumbnail) {
-      content.push(await photoToMessagePart(
-        log,
-        videoNote.thumbnail,
-        '<thumbnail not loaded>',
-      ))
-    }
-  }
-  if(voice) {
-    const part = (() => {
-      if(voice.status === 'done' && voice.data !== undefined) {
-        return {
-          type: 'input_audio' as const,
-          inputAudio: voice.data,
+      const text = getMessageText(msg, log)
+      if(text) {
+        content.push({ type: 'text', text })
+          content.push({ type: 'text', text: '\n' })
+      }
+
+      for(const photo of photos) {
+        content.push(await photoToMessagePart(log, photo, '<image not loaded>'))
+        content.push({ type: 'text', text: '\n' })
+      }
+
+      if(video) {
+        content.push({
+          type: 'text',
+          text: '<Video '
+            + (video.info.file_name ?? 'no name')
+            + ', '
+            + formatDurationSec(video.info.duration)
+            + ' not loaded>'
+        })
+        content.push({ type: 'text', text: '\n' })
+
+        if(video.thumbnail) {
+          content.push({ type: 'text', text: 'Thumbnail: ' })
+          content.push(await photoToMessagePart(
+            log,
+            video.thumbnail,
+            '<thumbnail not loaded>\n',
+          ))
         }
       }
 
-      return {
-        type: 'text' as const,
-        text: `<voice, ${formatDurationSec(voice.info.duration)} not loaded>`,
+      if(videoNote) {
+        content.push({
+          type: 'text',
+          text: `<Circular video, ${formatDurationSec(videoNote.info.duration)} not loaded>`
+        })
+        content.push({ type: 'text', text: '\n' })
+
+        if(videoNote.thumbnail) {
+          content.push({ type: 'text', text: 'Thumbnail: ' })
+          content.push(await photoToMessagePart(
+            log,
+            videoNote.thumbnail,
+            '<thumbnail not loaded>',
+          ))
+          content.push({ type: 'text', text: '\n' })
+        }
       }
-    })()
 
-    content.push(part)
-  }
-  if(msg.audio) {
-    content.push({
-      type: 'text' as const,
-      text: '<audio, '
-        + (msg.audio.title ?? msg.audio.file_name ?? 'unknown')
-        + ' by '
-        + (msg.audio.performer ?? 'unknown')
-        + ', '
-        + formatDurationSec(msg.audio.duration)
-        + ' not loaded>',
-    })
-  }
-  if(msg.document) {
-    content.push({
-      type: 'text' as const,
-      text: '<document '
-        + (msg.document.mime_type ?? 'application/octet-stream')
-        + ' '
-        + (msg.document.file_name ?? 'no name')
-        + ' not loaded>',
-    })
-  }
-  if(msg.location) {
-    content.push({
-      type: 'text' as const,
-      text: `<location lat: ${msg.location.latitude}, lon: ${msg.location.longitude}>`,
-    })
-  }
-  for(const sticker of stickers) {
-    content.push({
-      type: 'text' as const,
-      text: `<sticker ${sticker.emoji ?? 'not loaded'}>`,
-    })
-    if(sticker.thumbnail?.status === 'done') {
-      content.push(await photoToMessagePart(
-        log,
-        sticker.thumbnail,
-        '<sticker image not loaded>',
-      ))
+      if(voice) {
+        const part = (() => {
+          if(voice.status === 'done' && voice.data !== undefined) {
+            return {
+              type: 'input_audio' as const,
+              inputAudio: voice.data,
+            }
+          }
 
-    }
-  }
-  for(const linkInfo of linkInfos) {
-    content.push({
-      type: 'text' as const,
-      text: `<url ${linkInfo.url}: "${linkInfo.title}">`
-    })
-    if(linkInfo.image) {
-      content.push(await photoToMessagePart(
-        log,
-        linkInfo.image,
-        '<thumbnail not loaded>',
-      ))
-    }
-  }
-  content.push({ type: 'text', text: '\n' })
+          return {
+            type: 'text' as const,
+            text: `<voice, ${formatDurationSec(voice.info.duration)} not loaded>`,
+          }
+        })()
 
-  addContent(metadataObject)
-  addContent({ role, content })
+        content.push(part)
+        content.push({ type: 'text', text: '\n' })
+      }
+
+      if(msg.audio) {
+        content.push({
+          type: 'text' as const,
+          text: '<audio, '
+            + (msg.audio.title ?? msg.audio.file_name ?? 'unknown')
+            + ' by '
+            + (msg.audio.performer ?? 'unknown')
+            + ', '
+            + formatDurationSec(msg.audio.duration)
+            + ' not loaded>',
+        })
+        content.push({ type: 'text', text: '\n' })
+      }
+
+      if(msg.document) {
+        content.push({
+          type: 'text' as const,
+          text: '<document '
+            + (msg.document.mime_type ?? 'application/octet-stream')
+            + ' '
+            + (msg.document.file_name ?? 'no name')
+            + ' not loaded>',
+        })
+        content.push({ type: 'text', text: '\n' })
+      }
+
+      if(msg.location) {
+        content.push({
+          type: 'text' as const,
+          text: `<location lat: ${msg.location.latitude}, lon: ${msg.location.longitude}>`,
+        })
+        content.push({ type: 'text', text: '\n' })
+      }
+
+      for(const sticker of stickers) {
+        content.push({
+          type: 'text' as const,
+          text: `<sticker ${sticker.emoji ?? 'not loaded'}>`,
+        })
+        content.push({ type: 'text', text: '\n' })
+
+        if(sticker.thumbnail?.status === 'done') {
+          content.push({ type: 'text', text: 'Sticker image: ' })
+          content.push(await photoToMessagePart(
+            log,
+            sticker.thumbnail,
+            '<sticker image not loaded>',
+          ))
+          content.push({ type: 'text', text: '\n' })
+        }
+      }
+
+      for(const linkInfo of linkInfos) {
+        content.push({
+          type: 'text' as const,
+          text: `<url ${linkInfo.url}: "${linkInfo.title}">`
+        })
+        content.push({ type: 'text', text: '\n' })
+
+        if(linkInfo.image) {
+          content.push({ type: 'text', text: 'Thumbnail: ' })
+          content.push(await photoToMessagePart(
+            log,
+            linkInfo.image,
+            '<thumbnail not loaded>',
+          ))
+          content.push({ type: 'text', text: '\n' })
+        }
+      }
+
+      if(content.length === 0) {
+        content.push({ type: 'text', text: '<unsupported message>\n' })
+      }
+
+      return content
+    })(),
+  })
 
   if(message.type === 'root' && showFullGeneration) {
     for(const msg of message.generation) {
@@ -2564,7 +2617,7 @@ export function forwardedMessageMetadata(
   headers.push('from ' + (generatingMemory ? userPartsToMemoryId(userParts) : userPartsToUsername(userParts)))
   headers.push(dateToString(fromMessageDate(from.date)))
 
-  return '\n--- message ' + headers.join('; ') + ' ---\n'
+  return '--- message ' + headers.join('; ') + ' ---\n'
 }
 
 export function messageMetadata(msg: Types.Message, generatingMemory: boolean) {
@@ -2572,28 +2625,30 @@ export function messageMetadata(msg: Types.Message, generatingMemory: boolean) {
   const userParts = userToParts(msg.from, msg.sender_chat)
   headers.push('from ' + (generatingMemory ? userPartsToMemoryId(userParts) : userPartsToUsername(userParts)))
   headers.push(dateToString(fromMessageDate(msg.date)))
-  headers.push('messageId ' + msg.message_id)
+  if(!generatingMemory) headers.push('messageId ' + msg.message_id)
   /*
   if(msg.edit_date !== undefined) {
     headers += '- Edited At: ' + dateToString(fromMessageDate(msg.edit_date))
   }
   */
 
-  return '\n--- message ' + headers.join('; ') + ' ---\n'
+  return '--- message ' + headers.join('; ') + ' ---\n'
 }
 
-export function messageText(msg: Types.Message, log: L.Log) {
+export function getMessageText(msg: Types.Message, log: L.Log) {
   if(msg.text) {
     return entitiesToMd(msg.text, msg.entities ?? [], log).trim()
   }
   else if(msg.caption) {
     return entitiesToMd(msg.caption, msg.caption_entities ?? [], log).trim()
   }
-  return '<no message>'
+  return ''
 }
 
 export function userPartsToMemoryId(parts: UserParts) {
-  return parts.username === botUsername ? 'bot' : 'userId ' + parts.id
+  if(parts.username === botUsername) return 'bot'
+  if(parts.id === 0) return 'unknown'
+  return 'userId ' + parts.id
 }
 export function userPartsToUsername(parts: UserParts) {
   if(parts.username) return '@' + parts.username
@@ -2854,137 +2909,6 @@ export function entitiesToMd(
   }
 
   return partsWithQuotes.join('')
-
-  /*
-  const toProcess = entities.toSorted((a, b) => a.offset - b.offset)
-
-  const parts: ([string] | 'quoteBegin' | 'quoteEnd')[] = []
-  let endCodeUnit = 0
-  const toClose: Types.MessageEntity[] = []
-  let toProcessI = 0
-  while(toProcessI < toProcess.length || toClose.length > 0) {
-    const stopAt = Math.min(
-      ...(toProcessI < toProcess.length ? [toProcess[toProcessI].offset] : []),
-      ...toClose.map(it => it.offset + it.length),
-    )
-
-    parts.push([U.basedSlice(text, endCodeUnit, stopAt)])
-    // entities are applied fifo, so this needs to be backwards
-    for(let i = toClose.length - 1; i > -1; i--) {
-      const it = toClose[i]
-      if(it.offset + it.length > stopAt) continue
-
-      if(it.type === 'bold') {
-        parts.push(['**'])
-      }
-      else if(it.type === 'italic') {
-        parts.push(['*'])
-      }
-      else if(it.type === 'underline') {
-        parts.push(['</u>'])
-      }
-      else if(it.type === 'strikethrough') {
-        parts.push(['~~'])
-      }
-      else if(it.type === 'spoiler') {
-        parts.push(['||'])
-      }
-      else if(it.type === 'code') {
-        parts.push(['`'])
-      }
-      else if(it.type === 'pre') {
-        parts.push(['\n```\n'])
-      }
-      else if(it.type === 'blockquote' || it.type === 'expandable_blockquote') {
-        parts.push('quoteEnd')
-      }
-      else if(it.type === 'text_link') {
-        if(!it.url) log.unreachable([it])
-        parts.push([')['], [it.url ?? ''], [']'])
-      }
-      else {
-        log.I('Skipping unsupported ', [it])
-      }
-
-      toClose.splice(i, 1)
-    }
-
-    (() => {
-      if(toProcessI >= toProcess.length) return
-      const it = toProcess[toProcessI]
-      if(it.offset > stopAt) return
-
-      if(it.type === 'bold') {
-        parts.push(['**'])
-      }
-      else if(it.type === 'italic') {
-        parts.push(['*'])
-      }
-      else if(it.type === 'underline') {
-        parts.push(['<u>'])
-      }
-      else if(it.type === 'strikethrough') {
-        parts.push(['~~'])
-      }
-      else if(it.type === 'spoiler') {
-        parts.push(['||'])
-      }
-      else if(it.type === 'code') {
-        parts.push(['`'])
-      }
-      else if(it.type === 'pre') {
-        parts.push(['\n```\n'])
-      }
-      else if(it.type === 'blockquote' || it.type === 'expandable_blockquote') {
-        parts.push('quoteBegin')
-      }
-      else if(it.type === 'text_link') {
-        parts.push(['('])
-      }
-      else {
-        log.I('Skipping unsupported ', [it])
-      }
-
-      toClose.push(it)
-      toProcessI++
-    })()
-
-    endCodeUnit = stopAt
-  }
-  parts.push([U.basedSlice(text, endCodeUnit)])
-
-  const partsWithQuotes: string[] = []
-  for(let i = 0; i < parts.length; i++) {
-    if(parts[i] === 'quoteBegin') {
-      const handleQuote = (): string => {
-        let quoteParts: string = ''
-
-        for(i++; i < parts.length; i++) {
-          if(parts[i] === 'quoteBegin') {
-            quoteParts += handleQuote()
-          }
-          else if(parts[i]  === 'quoteEnd') {
-            break
-          }
-          else {
-            quoteParts += parts[i][0]
-          }
-        }
-
-        return quoteParts.trim().split('\n').map(it => '> ' + it).join('\n')
-      }
-      partsWithQuotes.push(handleQuote())
-    }
-    else if(parts[i]  === 'quoteEnd') {
-      log.unreachable([i])
-    }
-    else {
-      partsWithQuotes.push(parts[i][0])
-    }
-  }
-
-  return partsWithQuotes.join('')
-  */
 }
 
 export function mdToEntities(
