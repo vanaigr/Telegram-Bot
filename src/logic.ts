@@ -3213,30 +3213,36 @@ export function mdToTextParts(
           closeItalic()
           text.push({ type: 'd', v: 'bolditalic', active: flip('bolditalic') })
           i += 3
+          continue
         }
         else if(section[i] === '*' && section[i + 1] === '*') {
           closeItalic()
           closeBolditalic()
           text.push({ type: 'd', v: 'bold', active: flip('bold') })
           i += 2
+          continue
         }
         else if(section[i] === '*') {
           closeBold()
           closeBolditalic()
           text.push({ type: 'd', v: 'italic', active: flip('italic') })
           i += 1
+          continue
         }
         else if(section[i] === '_' && section[i + 1] === '_') {
           text.push({ type: 'd', v: 'underline', active: flip('underline') })
           i += 2
+          continue
         }
         else if(section[i] === '~' && section[i + 1] === '~') {
           text.push({ type: 'd', v: 'strikethrough', active: flip('strikethrough') })
           i += 2
+          continue
         }
         else if(section[i] === '|' && section[i + 1] === '|') {
           text.push({ type: 'd', v: 'spoiler', active: flip('spoiler') })
           i += 2
+          continue
         }
         else if(section[i] === '`' && section[i + 1] === '`' && section[i + 2] === '`') {
           text.push({ type: 'd', v: 'code', active: true })
@@ -3245,6 +3251,7 @@ export function mdToTextParts(
           text.push({ type: 'n', text: U.basedSlice(section, i, end) })
           text.push({ type: 'd', v: 'code', active: false })
           i = end + 3
+          continue
         }
         else if(section[i] === '`') {
           text.push({ type: 'd', v: 'inlineCode', active: true })
@@ -3253,12 +3260,13 @@ export function mdToTextParts(
           text.push({ type: 'n', text: U.basedSlice(section, i, end) })
           text.push({ type: 'd', v: 'inlineCode', active: false })
           i = end + 1
+          continue
         }
         else if(section[i] === '[') {
           const textEnd = section.indexOf(']', i + 1)
           if(textEnd !== -1) {
-            const urlStart = section.indexOf('(', textEnd + 1)
-            if(urlStart !== -1) {
+            const urlStart = textEnd + 1
+            if(section[urlStart] === '(') {
               const urlEnd = section.indexOf(')', urlStart + 1)
               if(urlEnd !== -1) {
                 text.push({
@@ -3273,15 +3281,13 @@ export function mdToTextParts(
           }
         }
 
-        {
-          let end = i + notStupidEnd(
-            U.basedSlice(section, i), // 🤡
-            it => it.search(/[*_~|`\[]/),
-          )
+        const end = (i + 1) + notStupidEnd(
+          U.basedSlice(section, i + 1), // 🤡
+          it => it.search(/[*_~|`\[]/),
+        )
 
-          text.push({ type: 'n', text: U.basedSlice(section, i, end) })
-          i = end
-        }
+        text.push({ type: 'n', text: U.basedSlice(section, i, end) })
+        i = end
       }
     }
   }
