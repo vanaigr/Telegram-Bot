@@ -2025,7 +2025,7 @@ export async function messagesToModelInput(
     const message = messages[i]
     await messageToModelInput(
       message,
-      { showFullGeneration: i >= showFullGenerationBeginI },
+      { showFullGeneration: i >= showFullGenerationBeginI, generatingMemory: false },
       openrouterMessages,
       log,
     )
@@ -2117,7 +2117,7 @@ type AllowedMessage = { role: 'assistant', content: ChatContentItems[] }
 export type MessageToModelInputOptions = {
   showFullGeneration: boolean
   actuallyNoItsForwardedTelegramApiDesignIsBeautiful?: boolean
-  generatingMemory?: boolean
+  generatingMemory: boolean
 }
 
 export async function messageToModelInput(
@@ -2126,25 +2126,27 @@ export async function messageToModelInput(
   _output: OpenRouterMessage[],
   log: L.Log,
 ) {
-  const showFullGeneration = options.showFullGeneration
-  const actuallyNoItsForwardedTelegramApiDesignIsBeautiful = options.actuallyNoItsForwardedTelegramApiDesignIsBeautiful ?? false
-
   const addContent = (content: AllowedMessage) => _output.push(content)
 
+  const showFullGeneration = options.showFullGeneration
+  const actuallyNoItsForwardedTelegramApiDesignIsBeautiful = options.actuallyNoItsForwardedTelegramApiDesignIsBeautiful ?? false
   const { msg, photos, voice, video, videoNote, stickers/*, reactions*/, linkInfos } = message
 
-  const metadataObject: AllowedMessage = {
+  const isBotMessage = isMessageFromBot(message.msg)
+
+  if(showFullGeneration && isBotMessage && !(message.type === 'root' && message.from === 'mark')) return
+
+  addContent({
     role: 'user',
     content: [{
       type: 'text',
       text: actuallyNoItsForwardedTelegramApiDesignIsBeautiful
-        ? forwardedMessageMetadata(msg, options.generatingMemory ?? false)
-        : messageMetadata(msg, options.generatingMemory ?? false),
+        ? forwardedMessageMetadata(msg, options.generatingMemory)
+        : messageMetadata(msg, options.generatingMemory),
     }],
-  }
+  })
 
   if(!actuallyNoItsForwardedTelegramApiDesignIsBeautiful && message.msg.forward_origin) {
-    addContent(metadataObject)
     await quote(_output, 'user', async() => {
       await messageToModelInput(
         message,
@@ -2153,233 +2155,241 @@ export async function messageToModelInput(
         log,
       )
     })
-    if(message.type === 'root' && showFullGeneration) {
-      for(const msg of message.generation) {
-        _output.push(msg)
-      }
+  }
+  else {
+    const role = isBotMessage ? 'assistant' as const : 'user' as const
+
+    if(message.replyToMessage !== undefined) {
+      const reply = message.replyToMessage
+
+      await quote(_output, role, async() => {
+        await messageToModelInput(
+          reply,
+          // NOTE: if the reply is a user message, we shouldn't show the following generation.
+          // If it is a bot message, we can't show the full generation (because we don't have it
+          // in that message, and because the message itself then wouldn't be shown)
+          { showFullGeneration: false, generatingMemory: options.generatingMemory },
+          _output,
+          log,
+        )
+      })
     }
-    return
-  }
 
-  if(msg.new_chat_title !== undefined) {
     addContent({
-      role: 'user',
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({ newChatTitle: msg.new_chat_title }),
-        },
-        { type: 'text', text: '\n' },
-      ],
-    })
-    return
-  }
-  else if(msg.new_chat_members !== undefined) {
-    addContent({
-      role: 'user',
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            newChatMembers: msg.new_chat_members.map(it => userPartsToUsername(userToParts(it, undefined))),
-          }),
-        },
-        { type: 'text', text: '\n' },
-      ],
-    })
-    return
-  }
-  else if(msg.left_chat_member !== undefined) {
-    addContent({
-      role: 'user',
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify({
-            leftChatMember: userPartsToUsername(userToParts(msg.left_chat_member, undefined)),
-          }),
-        },
-        { type: 'text', text: '\n' },
-      ],
-    })
-    return
-  }
+      role,
+      content: await (async() => {
+        const content: ChatContentItems[] = []
 
-  const isBotMessage = isMessageFromBot(message.msg)
-
-  if(showFullGeneration && isBotMessage && !(message.type === 'root' && message.from === 'mark')) return
-
-  addContent(metadataObject)
-
-  const role = isBotMessage ? 'assistant' as const : 'user' as const
-
-  if(message.replyToMessage !== undefined) {
-    const reply = message.replyToMessage
-
-    await quote(_output, role, async() => {
-      await messageToModelInput(
-        reply,
-        // NOTE: if the reply is a user message, we shouldn't show the following generation.
-        // If it is a bot message, we can't show the full generation (because we don't have it
-        // in that message, and because the message itself then wouldn't be shown)
-        { showFullGeneration: false },
-        _output,
-        log,
-      )
-    })
-  }
-
-  addContent({
-    role,
-    content: await (async() => {
-      const content: ChatContentItems[] = []
-
-      const text = getMessageText(msg, log)
-      if(text) {
-        content.push({ type: 'text', text })
-          content.push({ type: 'text', text: '\n' })
-      }
-
-      for(const photo of photos) {
-        content.push(await photoToMessagePart(log, photo, '<image not loaded>'))
-        content.push({ type: 'text', text: '\n' })
-      }
-
-      if(video) {
-        content.push({
-          type: 'text',
-          text: '<Video '
-            + (video.info.file_name ?? 'no name')
-            + ', '
-            + formatDurationSec(video.info.duration)
-            + ' not loaded>'
-        })
-        content.push({ type: 'text', text: '\n' })
-
-        if(video.thumbnail) {
-          content.push({ type: 'text', text: 'Thumbnail: ' })
-          content.push(await photoToMessagePart(
-            log,
-            video.thumbnail,
-            '<thumbnail not loaded>\n',
-          ))
+        if(msg.new_chat_title !== undefined) {
+          content.push(
+            {
+              type: 'text',
+              text: JSON.stringify({ newChatTitle: msg.new_chat_title }),
+            },
+            { type: 'text', text: '\n' },
+          )
         }
-      }
 
-      if(videoNote) {
-        content.push({
-          type: 'text',
-          text: `<Circular video, ${formatDurationSec(videoNote.info.duration)} not loaded>`
-        })
-        content.push({ type: 'text', text: '\n' })
-
-        if(videoNote.thumbnail) {
-          content.push({ type: 'text', text: 'Thumbnail: ' })
-          content.push(await photoToMessagePart(
-            log,
-            videoNote.thumbnail,
-            '<thumbnail not loaded>',
-          ))
-          content.push({ type: 'text', text: '\n' })
+        if(msg.new_chat_members !== undefined) {
+          content.push(
+            {
+              type: 'text',
+              text: JSON.stringify({
+                newChatMembers: msg.new_chat_members.map(it => userPartsToUsername(userToParts(it, undefined))),
+              }),
+            },
+            { type: 'text', text: '\n' },
+          )
         }
-      }
 
-      if(voice) {
-        const part = (() => {
-          if(voice.status === 'done' && voice.data !== undefined) {
-            return {
-              type: 'input_audio' as const,
-              inputAudio: voice.data,
+        if(msg.left_chat_member !== undefined) {
+          content.push(
+            {
+              type: 'text',
+              text: JSON.stringify({
+                leftChatMember: userPartsToUsername(userToParts(msg.left_chat_member, undefined)),
+              }),
+            },
+            { type: 'text', text: '\n' },
+          )
+        }
+
+        const text = getMessageText(msg, log)
+        if(text) {
+          content.push(
+            { type: 'text', text },
+            { type: 'text', text: '\n' },
+          )
+        }
+
+        for(const photo of photos) {
+          content.push(
+            await photoToMessagePart(log, photo, '<image not loaded>'),
+            { type: 'text', text: '\n' },
+          )
+        }
+
+        if(video) {
+          content.push(
+            {
+              type: 'text',
+              text: '<Video '
+                + (video.info.file_name ?? 'no name')
+                + ', '
+                + formatDurationSec(video.info.duration)
+                + ' not loaded>'
+            },
+            { type: 'text', text: '\n' },
+          )
+
+          if(video.thumbnail) {
+            content.push(
+              { type: 'text', text: 'Thumbnail: ' },
+              await photoToMessagePart(
+                log,
+                video.thumbnail,
+                '<thumbnail not loaded>',
+              ),
+              { type: 'text', text: '\n' },
+            )
+          }
+        }
+
+        if(videoNote) {
+          content.push(
+            {
+              type: 'text',
+              text: `<Circular video, ${formatDurationSec(videoNote.info.duration)} not loaded>`
+            },
+            { type: 'text', text: '\n' },
+          )
+
+          if(videoNote.thumbnail) {
+            content.push(
+              { type: 'text', text: 'Thumbnail: ' },
+              await photoToMessagePart(
+                log,
+                videoNote.thumbnail,
+                '<thumbnail not loaded>',
+              ),
+              { type: 'text', text: '\n' }
+            )
+          }
+        }
+
+        if(voice) {
+          const part = (() => {
+            if(voice.status === 'done' && voice.data !== undefined) {
+              return {
+                type: 'input_audio' as const,
+                inputAudio: voice.data,
+              }
             }
-          }
 
-          return {
-            type: 'text' as const,
-            text: `<voice, ${formatDurationSec(voice.info.duration)} not loaded>`,
-          }
-        })()
+            return {
+              type: 'text' as const,
+              text: `<voice, ${formatDurationSec(voice.info.duration)} not loaded>`,
+            }
+          })()
 
-        content.push(part)
-        content.push({ type: 'text', text: '\n' })
-      }
-
-      if(msg.audio) {
-        content.push({
-          type: 'text' as const,
-          text: '<audio, '
-            + (msg.audio.title ?? msg.audio.file_name ?? 'unknown')
-            + ' by '
-            + (msg.audio.performer ?? 'unknown')
-            + ', '
-            + formatDurationSec(msg.audio.duration)
-            + ' not loaded>',
-        })
-        content.push({ type: 'text', text: '\n' })
-      }
-
-      if(msg.document) {
-        content.push({
-          type: 'text' as const,
-          text: '<document '
-            + (msg.document.mime_type ?? 'application/octet-stream')
-            + ' '
-            + (msg.document.file_name ?? 'no name')
-            + ' not loaded>',
-        })
-        content.push({ type: 'text', text: '\n' })
-      }
-
-      if(msg.location) {
-        content.push({
-          type: 'text' as const,
-          text: `<location lat: ${msg.location.latitude}, lon: ${msg.location.longitude}>`,
-        })
-        content.push({ type: 'text', text: '\n' })
-      }
-
-      for(const sticker of stickers) {
-        content.push({
-          type: 'text' as const,
-          text: `<sticker ${sticker.emoji ?? 'not loaded'}>`,
-        })
-        content.push({ type: 'text', text: '\n' })
-
-        if(sticker.thumbnail?.status === 'done') {
-          content.push({ type: 'text', text: 'Sticker image: ' })
-          content.push(await photoToMessagePart(
-            log,
-            sticker.thumbnail,
-            '<sticker image not loaded>',
-          ))
-          content.push({ type: 'text', text: '\n' })
+          content.push(
+            part,
+            { type: 'text', text: '\n' },
+          )
         }
-      }
 
-      for(const linkInfo of linkInfos) {
-        content.push({
-          type: 'text' as const,
-          text: `<url ${linkInfo.url}: "${linkInfo.title}">`
-        })
-        content.push({ type: 'text', text: '\n' })
-
-        if(linkInfo.image) {
-          content.push({ type: 'text', text: 'Thumbnail: ' })
-          content.push(await photoToMessagePart(
-            log,
-            linkInfo.image,
-            '<thumbnail not loaded>',
-          ))
-          content.push({ type: 'text', text: '\n' })
+        if(msg.audio) {
+          content.push(
+            {
+              type: 'text' as const,
+              text: '<audio, '
+                + (msg.audio.title ?? msg.audio.file_name ?? 'unknown')
+                + ' by '
+                + (msg.audio.performer ?? 'unknown')
+                + ', '
+                + formatDurationSec(msg.audio.duration)
+                + ' not loaded>',
+            },
+            { type: 'text', text: '\n' },
+          )
         }
-      }
 
-      if(content.length === 0) {
-        content.push({ type: 'text', text: '<unsupported message>\n' })
-      }
+        if(msg.document) {
+          content.push(
+            {
+              type: 'text' as const,
+              text: '<document '
+                + (msg.document.mime_type ?? 'application/octet-stream')
+                + ' '
+                + (msg.document.file_name ?? 'no name')
+                + ' not loaded>',
+            },
+            { type: 'text', text: '\n' },
+          )
+        }
 
-      return content
-    })(),
-  })
+        if(msg.location) {
+          content.push(
+            {
+              type: 'text' as const,
+              text: `<location lat: ${msg.location.latitude}, lon: ${msg.location.longitude}>`,
+            },
+            { type: 'text', text: '\n' },
+          )
+        }
+
+        for(const sticker of stickers) {
+          content.push(
+            {
+              type: 'text' as const,
+              text: `<sticker ${sticker.emoji ?? 'not loaded'}>`,
+            },
+            { type: 'text', text: '\n' }
+          )
+
+          if(sticker.thumbnail?.status === 'done') {
+            content.push(
+              { type: 'text', text: 'Sticker image: ' },
+              await photoToMessagePart(
+                log,
+                sticker.thumbnail,
+                '<sticker image not loaded>',
+              ),
+              { type: 'text', text: '\n' }
+            )
+          }
+        }
+
+        for(const linkInfo of linkInfos) {
+          content.push(
+            {
+              type: 'text' as const,
+              text: `<url ${linkInfo.url}: "${linkInfo.title}">`
+            },
+            { type: 'text', text: '\n' },
+          )
+
+          if(linkInfo.image) {
+            content.push(
+              { type: 'text', text: 'Thumbnail: ' },
+              await photoToMessagePart(
+                log,
+                linkInfo.image,
+                '<thumbnail not loaded>',
+              ),
+              { type: 'text', text: '\n' },
+            )
+          }
+        }
+
+        if(content.length === 0) {
+          content.push({ type: 'text', text: '<unsupported message>\n' })
+        }
+
+        return content
+      })(),
+    })
+  }
 
   if(message.type === 'root' && showFullGeneration) {
     for(const msg of message.generation) {
@@ -2615,7 +2625,14 @@ export function getMessageText(msg: Types.Message, log: L.Log) {
 
 export function userPartsToMemoryId(parts: UserParts) {
   if(parts.username === botUsername) return 'bot'
-  if(parts.id === 0) return 'unknown'
+  if(parts.id === 0) {
+    const name = (() => {
+      if(parts.username) return '@' + parts.username
+      if(parts.fullName) return parts.fullName
+      return ''
+    })()
+    return 'unknown' + (name ? ` (${name})` : '')
+  }
   return 'userId ' + parts.id
 }
 export function userPartsToUsername(parts: UserParts) {
@@ -2662,7 +2679,7 @@ export function forwardOriginToParts(origin: Types.MessageOrigin): UserParts {
     return userToParts(origin.sender_user, undefined)
   }
   else if(origin.type === 'hidden_user') {
-    return { username: origin.sender_user_name, fullName: '', id: 0 }
+    return { username: '', fullName: origin.sender_user_name, id: 0 }
   }
   else if(origin.type === 'chat') {
     return userToParts(undefined, origin.sender_chat)

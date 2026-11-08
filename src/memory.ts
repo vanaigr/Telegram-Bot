@@ -453,7 +453,7 @@ You maintain long-term memory about the members of a Telegram group chat. These 
 
 You are given:
 1. The chat members with their current descriptions.
-2. The next batch of historic chat messages. Each message starts with a "--- message from ... ---" header with the sender's user id, followed by the message content and then its metadata. Replies and forwards are prefixed with "> ".
+2. The next batch of historic chat messages. Each message starts with a "--- message from ... ---" header with the sender's user id and message metadata, followed by the message content. Replies and forwards are prefixed with "> ".
 
 ## The test for every line
 Before writing or keeping any line, ask: "Would this still matter, or change how someone talks to this person, 3 months from now?"
