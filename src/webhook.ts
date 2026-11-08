@@ -54,20 +54,43 @@ const channelToLevel = {
   E: 'error',
 }
 
+function mb(bytes: number) {
+  return Math.round(bytes / (1024 * 1024))
+}
+
 function makeLogger(reqId: string) {
   const token = process.env.AXIOM_TOKEN
   const dataset = process.env.AXIOM_DATASET
 
   if(!token || !dataset) return
 
-  const savedLogs: { reqId: string, level: string, _time: string, text: string }[] = []
+  const savedLogs: {
+    rss: number
+    heapUsed: number
+    heapTotal: number
+    external: number
+    arrayBuffers: number
+
+    reqId: string
+    level: string
+    _time: string
+    text: string
+  }[] = []
 
   let lastFlush: Promise<unknown> = Promise.resolve()
   let pendingFlush: Promise<unknown> | undefined
 
   return {
     logger: (channel: L.Channel, timestamp: string, text: string) => {
-      savedLogs.push({ reqId, level: channelToLevel[channel], _time: timestamp, text })
+      const m = process.memoryUsage();
+      savedLogs.push({
+        rss: mb(m.rss), heapUsed: mb(m.heapUsed), heapTotal: mb(m.heapTotal),
+        external: mb(m.external), arrayBuffers: mb(m.arrayBuffers),
+        reqId,
+        level: channelToLevel[channel],
+        _time: timestamp,
+        text,
+      })
 
       if(pendingFlush === undefined) {
         const flushRun = (async() => {
