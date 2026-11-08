@@ -155,13 +155,8 @@ async function generateMemory(
 
   const transcript: Logic.ChatContentItems[] = []
   for(const message of messages) {
-    const sender = message.msg.from === undefined
-      ? 'unknown'
-      : Logic.isMessageFromBot(message) ? 'bot' : 'userId ' + message.msg.from.id
-    transcript.push({ type: 'text', text: `\n--- message from ${sender} ---\n` })
-
     const output: Logic.OpenRouterMessage[] = []
-    await Logic.messageToModelInput(message, { showFullGeneration: false, hideSender: true }, output, log)
+    await Logic.messageToModelInput(message, { showFullGeneration: false, generatingMemory: true }, output, log)
     for(const it of output) {
       if(typeof it.content === 'string') transcript.push({ type: 'text', text: it.content })
       else if(Array.isArray(it.content)) transcript.push(...it.content as Logic.ChatContentItems[])

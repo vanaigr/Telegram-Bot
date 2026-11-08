@@ -20,8 +20,8 @@ if(!pool) throw new Error()
 {
   const messages = await Logic.fetchMessages(pool, log, -1002830050312, { lastMessage: 15494 })
   const input = await Logic.messagesToModelInput({
-    notes: [],
     messages,
+    memorySummary: undefined,
     log,
     chatInfo: undefined,
     caching: false,

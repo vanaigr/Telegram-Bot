@@ -2006,19 +2006,20 @@ export async function messagesToModelInput(
 ): Promise<OpenRouterMessage[]> {
   const openrouterMessages: OpenRouterMessage[] = []
 
-  if(chatInfo) {
-    openrouterMessages.push({
-      role: 'user',
-      content: [{
-        type: 'text',
-        text: JSON.stringify({
-          chatTitle: chatInfo.title ?? null,
-          chatDescription: chatInfo.description ?? null,
-          users: chatInfo.active_usernames?.map(it => '@' + it),
-        }),
-      }],
-    })
-  }
+  const messageSubsetBeginI = Math.max(messages.findLastIndex(it => it.msg.text?.startsWith('/amnesia')), 0)
+
+  openrouterMessages.push({
+    role: 'user',
+    content: [{
+      type: 'text',
+      text: JSON.stringify({
+        chatTitle: chatInfo?.title ?? null,
+        chatDescription: chatInfo?.description ?? null,
+        users: chatInfo?.active_usernames?.map(it => '@' + it),
+        userNames: collectUserNames(messages.slice(messageSubsetBeginI)),
+      }),
+    }],
+  })
 
   if(memorySummary) {
     openrouterMessages.push({
@@ -2031,13 +2032,11 @@ export async function messagesToModelInput(
     })
   }
 
-  const messageSubsetBeginI = Math.max(messages.findLastIndex(it => it.msg.text?.startsWith('/amnesia')), 0)
-
   const showFullGenerationBeginI = (() => {
     let i = messages.length - 1
     let messageC = 0
     while(i > 0) {
-      if(!isMessageFromBot(messages[i])) {
+      if(!isMessageFromBot(messages[i].msg)) {
         messageC++
       }
 
@@ -2093,8 +2092,38 @@ export async function messagesToModelInput(
   return openrouterMessages
 }
 
-export function isMessageFromBot(message: AnyMessageWithAttachments) {
-  return message.msg.from?.username === botUsername
+// Maps usernames (as shown in message headers) to full names
+// for every user that appears in the given messages.
+export function collectUserNames(messages: AnyMessageWithAttachments[]) {
+  const result: Record<string, string> = {}
+
+  const addParts = ({ username, fullName }: { username: string, fullName: string }) => {
+    if(username) result['@' + username] = fullName
+  }
+  const add = (user: Types.User | undefined, chat: Types.Chat | undefined) => {
+    if(!user && !chat) return
+    addParts(userToParts(user, chat))
+  }
+
+  const addMessage = (message: AnyMessageWithAttachments) => {
+    const msg = message.msg
+    add(msg.from, msg.sender_chat)
+
+    if(msg.forward_origin) addParts(forwardOriginToParts(msg.forward_origin))
+
+    for(const member of msg.new_chat_members ?? []) add(member, undefined)
+    add(msg.left_chat_member, undefined)
+
+    if(message.replyToMessage) addMessage(message.replyToMessage)
+  }
+
+  for(const message of messages) addMessage(message)
+
+  return result
+}
+
+export function isMessageFromBot(msg: Types.Message) {
+  return msg.from?.username === botUsername
 }
 
 type ChatContentText = {
@@ -2117,7 +2146,7 @@ type AllowedMessage = { role: 'assistant', content: ChatContentItems[] }
 export type MessageToModelInputOptions = {
   showFullGeneration: boolean
   actuallyNoItsForwardedTelegramApiDesignIsBeautiful?: boolean
-  hideSender?: boolean
+  generatingMemory?: boolean
 }
 
 export async function messageToModelInput(
@@ -2138,21 +2167,21 @@ export async function messageToModelInput(
     content: [{
       type: 'text',
       text: actuallyNoItsForwardedTelegramApiDesignIsBeautiful
-        ? forwardedMessageMetadata(msg)
-        : messageMetadata(msg, !(options.hideSender ?? false)),
+        ? forwardedMessageMetadata(msg, options.generatingMemory ?? false)
+        : messageMetadata(msg, options.generatingMemory ?? false),
     }],
   }
 
   if(!actuallyNoItsForwardedTelegramApiDesignIsBeautiful && message.msg.forward_origin) {
+    addContent(metadataObject)
     await quote(_output, 'user', async() => {
       await messageToModelInput(
         message,
-        { showFullGeneration: false, actuallyNoItsForwardedTelegramApiDesignIsBeautiful: true, hideSender: options.hideSender },
+        { showFullGeneration: false, actuallyNoItsForwardedTelegramApiDesignIsBeautiful: true, generatingMemory: options.generatingMemory },
         _output,
         log,
       )
     })
-    addContent(metadataObject)
     if(message.type === 'root' && showFullGeneration) {
       for(const msg of message.generation) {
         _output.push(msg)
@@ -2177,7 +2206,7 @@ export async function messageToModelInput(
       content: [{
         type: 'text',
         text: JSON.stringify({
-          newChatMembers: msg.new_chat_members.map(it => userToString(it, undefined, true)),
+          newChatMembers: msg.new_chat_members.map(it => userPartsToUsername(userToParts(it, undefined))),
         }),
       }],
     })
@@ -2189,14 +2218,14 @@ export async function messageToModelInput(
       content: [{
         type: 'text',
         text: JSON.stringify({
-          leftChatMember: userToString(msg.left_chat_member, undefined, true),
+          leftChatMember: userPartsToUsername(userToParts(msg.left_chat_member, undefined)),
         }),
       }],
     })
     return
   }
 
-  const isBotMessage = isMessageFromBot(message)
+  const isBotMessage = isMessageFromBot(message.msg)
 
   if(showFullGeneration && isBotMessage && !(message.type === 'root' && message.from === 'mark')) return
 
@@ -2328,8 +2357,8 @@ export async function messageToModelInput(
   }
   content.push({ type: 'text', text: '\n' })
 
-  addContent({ role, content })
   addContent(metadataObject)
+  addContent({ role, content })
 
   if(message.type === 'root' && showFullGeneration) {
     for(const msg of message.generation) {
@@ -2526,50 +2555,31 @@ export function fromMessageDate(messageDate: number) {
 
 export function forwardedMessageMetadata(
   msg: Types.Message,
+  generatingMemory: boolean
 ) {
-  let headers = ''
-
   const from = msg.forward_origin!
-  if(from.type === 'user') {
-    headers += '\n--- message from ' + userToString(from.sender_user, undefined, true) + ' ---\n'
-  }
-  else if(from.type === 'hidden_user') {
-    headers += '\n--- message from ' + from.sender_user_name + ' ---\n'
-  }
-  else if(from.type === 'chat') {
-    headers += '\n--- message from ' + userToString(undefined, from.sender_chat, true) + ' ---\n'
-  }
-  else if(from.type === 'channel') {
-    headers += '\n--- message from ' + userToString(undefined, from.chat, true) + ' ---\n'
-  }
-  else {
-    headers += '\n--- message from ' + userToString(undefined, undefined, true) + ' ---\n'
-  }
 
-  headers += '- At: ' + dateToString(fromMessageDate(from.date)) + '\n'
+  const headers: string[] = []
+  const userParts = forwardOriginToParts(from)
+  headers.push('from ' + (generatingMemory ? userPartsToMemoryId(userParts) : userPartsToUsername(userParts)))
+  headers.push(dateToString(fromMessageDate(from.date)))
 
-  return headers.trim()
+  return '\n--- message ' + headers.join('; ') + ' ---\n'
 }
 
-export function messageMetadata(
-  msg: Types.Message,
-  showSender: boolean,
-) {
-
-  let headers = ''
-
-  if(showSender) {
-    headers += '\n--- message from ' + userToString(msg.from, msg.sender_chat, true) + ' ---\n'
-  }
-  headers += '- messageId: ' + msg.message_id + '\n'
-  headers += '- At: ' + dateToString(fromMessageDate(msg.date)) + '\n'
+export function messageMetadata(msg: Types.Message, generatingMemory: boolean) {
+  const headers: string[] = []
+  const userParts = userToParts(msg.from, msg.sender_chat)
+  headers.push('from ' + (generatingMemory ? userPartsToMemoryId(userParts) : userPartsToUsername(userParts)))
+  headers.push(dateToString(fromMessageDate(msg.date)))
+  headers.push('messageId ' + msg.message_id)
   /*
   if(msg.edit_date !== undefined) {
     headers += '- Edited At: ' + dateToString(fromMessageDate(msg.edit_date))
   }
   */
 
-  return headers.trim()
+  return '\n--- message ' + headers.join('; ') + ' ---\n'
 }
 
 export function messageText(msg: Types.Message, log: L.Log) {
@@ -2582,11 +2592,21 @@ export function messageText(msg: Types.Message, log: L.Log) {
   return '<no message>'
 }
 
-export function userToString(
+export function userPartsToMemoryId(parts: UserParts) {
+  return parts.username === botUsername ? 'bot' : 'userId ' + parts.id
+}
+export function userPartsToUsername(parts: UserParts) {
+  if(parts.username) return '@' + parts.username
+  if(parts.fullName) return parts.fullName
+  return '@god_user'
+}
+
+export type UserParts = { username: string, fullName: string, id: number }
+
+export function userToParts(
   senderUser: Types.User | undefined,
   senderChat: Types.Chat | undefined,
-  full: boolean,
-) {
+): UserParts {
   if(senderChat) {
     const fullName = (() => {
       if(senderChat.title) return senderChat.title
@@ -2596,46 +2616,39 @@ export function userToString(
         .join(' ')
     })()
 
-    const username = senderChat.username ?? ''
+    const username = senderChat.username || ''
 
-    const addFullName = full && !!fullName
-    const addUsername = !!username
-
-    if(addFullName && addUsername) {
-      return `${fullName} (@${username})`
-    }
-    else if(addFullName) {
-      return fullName
-    }
-    else if(addUsername) {
-      return username
-    }
-    else {
-      return '@god_user'
-    }
+    return { username, fullName, id: senderChat.id }
   }
   else if(senderUser) {
     const fullName = [senderUser.first_name, senderUser.last_name]
         .filter(it => it !== undefined)
         .join(' ')
 
-    const username = senderUser.username ?? ''
+    const username = senderUser.username || ''
 
-    const addFullName = full && !!fullName
-    const addUsername = !!username
+    return { username, fullName, id: senderUser.id }
+  }
+  else {
+    return { username: '', fullName: '', id: 0 }
+  }
+}
 
-    if(addFullName && addUsername) {
-      return `${fullName} (@${username})`
-    }
-    else if(addFullName) {
-      return fullName
-    }
-    else if(addUsername) {
-      return username
-    }
-    else {
-      return '@god_user'
-    }
+export function forwardOriginToParts(origin: Types.MessageOrigin): UserParts {
+  if(origin.type === 'user') {
+    return userToParts(origin.sender_user, undefined)
+  }
+  else if(origin.type === 'hidden_user') {
+    return { username: origin.sender_user_name, fullName: '', id: 0 }
+  }
+  else if(origin.type === 'chat') {
+    return userToParts(undefined, origin.sender_chat)
+  }
+  else if(origin.type === 'channel') {
+    return userToParts(undefined, origin.chat)
+  }
+  else {
+    return userToParts(undefined, undefined)
   }
 }
 
