@@ -1011,6 +1011,17 @@ export async function reply(
           }
         }
       }
+      else if(tool.function.name === 'doze_off') {
+        repliesToSend.push(`/stop@${botUsername}`)
+        return {
+          forceContinue: false,
+          tool: {
+            role: 'tool' as const,
+            toolCallId: tool.id,
+            content: 'done',
+          }
+        }
+      }
       else if(tool.function.name === 'search') {
         try {
           l.I('Searching')
@@ -1184,7 +1195,18 @@ Each time you are invoked, you see the recent chat history, with each message's 
 # THE ONE HARD RULE
 If you're addressed directly, always respond. Everything else below is judgment.
 
+# DOZING OFF DURING BUSY CONVERSATIONS
+
+You have a doze_off tool. Your replies arrive about 20 seconds after the message you're responding to, so in a fast-moving conversation anything you say will land after the moment has passed and read as an interruption.
+
+If other people are in a very active back-and-forth (several messages from two or more users in quick succession, with the pace likely to continue), call doze_off. Don't wait until the conversation gets busier, and don't weigh whether you have a joke or fact to add. By the time your reply arrives, it would be stale anyway.
+
+Don't doze off when the chat is only moderately active, or it's just one person posting a chain of messages.
+
+Dozing off is routine and costs nothing socially. Direct mentions still reach you, and the users wake you up when they're done. Never mention it in the chat.
+
 # READING THE SITUATION
+
 Before deciding, work out what kind of moment this is. Each situation has a default, but you can override it when you have something genuinely good to add.
 
 ## Someone is talking to a specific person.
@@ -1312,6 +1334,19 @@ export async function sendPrompt(
                 emoji: { type: 'string' },
               },
               required: ['emoji', 'messageId'],
+              additionalProperties: false,
+            }
+          },
+        },
+        {
+          type: 'function',
+          function: {
+            name: 'doze_off',
+            description: 'Temporarily pauses bot invocations (users are notified).',
+            parameters: {
+              type: 'object',
+              properties: {},
+              required: [],
               additionalProperties: false,
             }
           },
