@@ -1311,7 +1311,7 @@ export async function sendPrompt(
           type: 'function',
           function: {
             name: 'text_reply',
-            description: 'Sends a text message',
+            description: 'Sends a text message. Input is markdown (only * accepted for bold/italic; use ||spoiler|| for spoilers)',
             parameters: {
               type: 'object',
               properties: {
@@ -3229,11 +3229,13 @@ export function mdToTextParts(
           i += 1
           continue
         }
+        /*
         else if(section[i] === '_' && section[i + 1] === '_') {
           text.push({ type: 'd', v: 'underline', active: flip('underline') })
           i += 2
           continue
         }
+        */
         else if(section[i] === '~' && section[i + 1] === '~') {
           text.push({ type: 'd', v: 'strikethrough', active: flip('strikethrough') })
           i += 2
@@ -3283,7 +3285,8 @@ export function mdToTextParts(
 
         const end = (i + 1) + notStupidEnd(
           U.basedSlice(section, i + 1), // 🤡
-          it => it.search(/[*_~|`\[]/),
+          //it => it.search(/[*_~|`\[]/),
+          it => it.search(/[*~|`\[]/),
         )
 
         text.push({ type: 'n', text: U.basedSlice(section, i, end) })
