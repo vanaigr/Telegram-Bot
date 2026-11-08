@@ -724,18 +724,6 @@ export async function reply(
     log,
     caching: true,
   })
-  /*
-  if(Math.random() < 0.7) {
-    log.I('Asked bot to not respond')
-    openrouterMessages.push({
-      role: 'system',
-      content: '**Override**: Do not respond unless the users are talking to you, or want you or anyone to respond, or'
-    })
-  }
-  else {
-    log.I('Skipped asking bot to not respond')
-  }
-  */
 
   let thisMessageGeneration: OpenRouterMessage[] = []
   let photoToSend: { data: Buffer, mime: string } | undefined
@@ -1973,26 +1961,6 @@ export function dbMessageToMessageWithAttachments(msg: Types.Message, root: bool
   }
 }
 
-/*
-type LlmMessage = {
-  role: 'user'
-  content: Array<
-    { type: 'text', text: string, cacheControl?: { type: 'ephemeral' } }
-      | { type: 'image_url', imageUrl: { url: string } }
-  >
-} | {
-  role: 'assistant'
-  content: Array<
-    { type: 'text', text: string, cacheControl?: { type: 'ephemeral' } }
-  >
-} | {
-  role: 'system'
-  content: Array<
-    { type: 'text', text: string, cacheControl?: { type: 'ephemeral' } }
-  >
-}
-*/
-
 export async function messagesToModelInput(
   {
     messages, log, chatInfo, memorySummary, caching,
@@ -2009,7 +1977,7 @@ export async function messagesToModelInput(
   const messageSubsetBeginI = Math.max(messages.findLastIndex(it => it.msg.text?.startsWith('/amnesia')), 0)
 
   openrouterMessages.push({
-    role: 'system',
+    role: 'user',
     content: [
       {
         type: 'text',
@@ -2026,7 +1994,7 @@ export async function messagesToModelInput(
 
   if(memorySummary) {
     openrouterMessages.push({
-      role: 'system',
+      role: 'user',
       content: [{
         type: 'text',
         text: 'What you remember about chat members from earlier messages (may be outdated):\n'
@@ -2166,7 +2134,7 @@ export async function messageToModelInput(
   const { msg, photos, voice, video, videoNote, stickers/*, reactions*/, linkInfos } = message
 
   const metadataObject: AllowedMessage = {
-    role: 'system',
+    role: 'user',
     content: [{
       type: 'text',
       text: actuallyNoItsForwardedTelegramApiDesignIsBeautiful
