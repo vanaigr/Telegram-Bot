@@ -1056,7 +1056,7 @@ export async function reply(
           const content = searchResult.choices[0].message.content
           if(typeof content === 'string') {
             return {
-              forceContinue: false,
+              forceContinue: true,
               tool: {
                 role: 'tool' as const,
                 toolCallId: tool.id,
