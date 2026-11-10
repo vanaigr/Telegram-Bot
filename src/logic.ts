@@ -1001,6 +1001,14 @@ export async function reply(
       }
       else if(tool.function.name === 'doze_off') {
         repliesToSend.push(`/stop@${botUsername}`)
+
+        const t = Db.t.chatWhitelist
+        await Db.queryRaw(pool,
+          'update', t,
+          'set', Db.set(t.enabled, Db.param(false)),
+          'where', Db.eq(t.id, Db.param(BigInt(chatId))),
+        )
+
         return {
           forceContinue: false,
           tool: {
@@ -1185,9 +1193,9 @@ If you're addressed directly, always respond. Everything else below is judgment.
 
 # DOZING OFF DURING BUSY CONVERSATIONS
 
-You have a doze_off tool. Your replies arrive about 20 seconds after the message you're responding to, so in a fast-moving conversation anything you say will land after the moment has passed and read as an interruption.
+You have a doze_off tool. Your replies arrive about 10 seconds after the message you're responding to, so in a fast-moving conversation anything you say will land after the moment has passed and read as an interruption.
 
-If other people are in a very active back-and-forth (several messages from two or more users in quick succession, with the pace likely to continue), call doze_off. Don't wait until the conversation gets busier, and don't weigh whether you have a joke or fact to add. By the time your reply arrives, it would be stale anyway.
+If other people are in a very active back-and-forth (7+ messages from two or more users in quick succession, with the pace likely to continue), call doze_off. Don't weigh whether you have a joke or fact to add. By the time your reply arrives, it would be stale anyway.
 
 Don't doze off when the chat is only moderately active, or it's just one person posting a chain of messages.
 
