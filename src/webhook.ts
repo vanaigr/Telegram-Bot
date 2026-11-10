@@ -1,5 +1,6 @@
 import { waitUntil, attachDatabasePool } from '@vercel/functions'
 
+import { OpenRouter } from '@openrouter/sdk'
 import * as DbClient from './db/client.ts'
 import * as Db from './db/index.ts'
 import * as L from './lib/log.ts'
@@ -255,6 +256,21 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
 
       return new Response()
     }
+    else if(messageText.startsWith('/credits')) {
+      log.I('Received credits command')
+
+      const chatId = message.chat.id
+
+      const openRouter = new OpenRouter({ apiKey: process.env.OPENROUTER_KEY! });
+      const credits = await openRouter.credits.getCredits()
+      log.I('Credits: ', [credits])
+
+      const remaining = credits.data.totalCredits - credits.data.totalUsage
+      const remS = remaining.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })
+      await Logic.sendMessage(chatId, { text: `Осталось $${remS}`, entities: [] }, log)
+
+      return new Response()
+    }
   }
 
   await Db.timedTran(pool, async(db) => {
@@ -351,18 +367,42 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
           log.I('Bot in chat is disabled')
           return
         }
-        await Db.tran(pool, async(db) => {
-          await Logic.reply(
-            pool,
-            db,
-            l,
-            Logic.fromMessageDate(message.date),
-            message.chat.id,
-            whitelistInfo.memoryEnabled,
-            whitelistInfo.instructions,
-            completion
-          )
-        })
+
+        await U.all([
+          Db.tran(pool, async(db) => {
+            await Logic.reply(
+              pool,
+              db,
+              l,
+              Logic.fromMessageDate(message.date),
+              message.chat.id,
+              whitelistInfo.memoryEnabled,
+              whitelistInfo.instructions,
+              completion
+            )
+          }),
+          (async() => {
+            const chatId = message.chat.id
+
+            if(Math.random() >= 0.1) return
+            const openRouter = new OpenRouter({ apiKey: process.env.OPENROUTER_KEY! });
+            const credits = await openRouter.credits.getCredits()
+
+            const remaining = credits.data.totalCredits - credits.data.totalUsage
+            if(remaining < 1) {
+
+              const t = Db.t.chatWhitelist
+              await Db.queryRaw(pool,
+                'update', t,
+                'set', Db.set(t.enabled, Db.param(false)),
+                'where', Db.eq(t.id, Db.param(BigInt(chatId))),
+              )
+
+              const remS = remaining.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })
+              await Logic.sendMessage(chatId, { text: `/stop@${Logic.botUsername} Осталось $${remS}`, entities: [] }, log)
+            }
+          })(),
+        ])
       }
     }
     catch(error) {
