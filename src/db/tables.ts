@@ -134,6 +134,7 @@ export const tables = {
         "enabled": t_boolean,
         "memoryEnabled": t_boolean,
         "instructions": t_text,
+        "custom": t_json,
     },
     "debug": {
         "sequenceNumber": t_integer,

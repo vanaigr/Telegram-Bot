@@ -105,6 +105,7 @@ model chatWhitelist {
     enabled Boolean @default(true)
     memoryEnabled Boolean @default(false)
     instructions String @default("")
+    custom Json @default("{}")
 }
 
 model debug {

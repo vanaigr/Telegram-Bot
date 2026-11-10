@@ -497,12 +497,11 @@ export async function reply(
   log: L.Log,
   messageDate: T.Instant,
   chatId: number,
-  memoryEnabled: boolean,
-  instructions: string,
+  whitelistInfo: { memoryEnabled: boolean, instructions: string, custom: { model?: string } },
   completion: { sent: boolean },
 ) {
   const chatInfoP = getChatFullInfo(pool, log, chatId)
-  const memorySummaryP = memoryEnabled ? getMemorySummary(pool, log, chatId) : undefined
+  const memorySummaryP = whitelistInfo.memoryEnabled ? getMemorySummary(pool, log, chatId) : undefined
 
   log.I('Locking ', [chatId])
   try {
@@ -835,7 +834,7 @@ export async function reply(
       let remainingRetries = 3
       while(remainingRetries > 0) {
         try {
-          response = await sendPrompt(openRouter, openrouterMessages, systemPrompt(instructions))
+          response = await sendPrompt(openRouter, openrouterMessages, systemPrompt(whitelistInfo.instructions), whitelistInfo.custom.model ?? '')
           break
         }
         catch(error) {
@@ -1261,6 +1260,7 @@ export async function sendPrompt(
   openRouter: OpenRouter,
   messages: OpenRouterMessage[],
   systemPrompt: string,
+  model: string,
 ) {
   return await openRouter.chat.send({
     chatRequest: {
@@ -1270,7 +1270,7 @@ export async function sendPrompt(
       // No, but it's still better than other options
       //model: 'google/gemini-3-flash-preview',
 
-      model: 'google/gemini-3.6-flash',
+      model: model || 'google/gemini-3.6-flash',
 
       // Bad, does thinking outside thinking blocks.
       //model: 'google/gemini-3.5-flash-lite',

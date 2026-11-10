@@ -271,6 +271,32 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
 
       return new Response()
     }
+    else if(/^\/model(@balbes52_bot)?(\s|$)/.test(messageText)) {
+      log.I('Received model command')
+
+      const model = messageText.replace(/^\/model(@balbes52_bot)?/, '').trim()
+
+      const t = Db.t.chatWhitelist
+      await Db.queryRaw(pool,
+        'update', t,
+        'set', [
+          Db.set(
+            t.custom,
+            Db.func(
+              'jsonb_set',
+              t.custom,
+              "'{model}'",
+              Db.func('to_jsonb', [Db.param(model), '::text']),
+            )
+          ),
+        ],
+        'where', Db.eq(t.id, Db.param(BigInt(message.chat.id))),
+      )
+
+      await Logic.setMessageReaction(message.chat.id, message.message_id, '👍', log)
+
+      return new Response()
+    }
   }
 
   await Db.timedTran(pool, async(db) => {
@@ -376,8 +402,7 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
               l,
               Logic.fromMessageDate(message.date),
               message.chat.id,
-              whitelistInfo.memoryEnabled,
-              whitelistInfo.instructions,
+              whitelistInfo,
               completion
             )
           }),
@@ -431,12 +456,14 @@ async function handleMessage(log: L.Log, message: Types.Message, edit: boolean) 
 }
 
 async function getChatWhitelistInfo(pool: Db.DbPool, log: L.Log, chatId: number) {
+  const t = Db.t.chatWhitelist
   const whitelistInfo = await Db.query(pool,
     'select', [
-      Db.t.chatWhitelist.id,
-      Db.t.chatWhitelist.enabled,
-      Db.t.chatWhitelist.memoryEnabled,
-      Db.t.chatWhitelist.instructions,
+      t.id,
+      t.enabled,
+      t.memoryEnabled,
+      t.instructions,
+      t.custom,
     ],
     'from', Db.t.chatWhitelist,
     'where', Db.eq(Db.t.chatWhitelist.id, Db.param(BigInt(chatId))),
