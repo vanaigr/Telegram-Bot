@@ -1550,7 +1550,7 @@ export async function fetchMessages(
     for(let i = messages.length - 1; i >= 0; i--) {
       const message = messages[i]
       const indexFromEnd = messagesIndexFromEnd[i]
-      if(indexFromEnd === 0) result.push(message)
+      if(indexFromEnd === 0 || indexFromEnd === 1) result.push(message)
     }
     return result
   })()
