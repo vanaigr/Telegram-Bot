@@ -94,7 +94,7 @@ model files {
     @@id([chatId, fileUniqueId])
 }
 
-// Locks `responses` for that chat
+// Locks replying in that chat
 model chatLocks {
     id BigInt @id
 }
@@ -169,7 +169,7 @@ model chatUserMemory {
     @@id([chatId, lastMessageId])
 }
 
-// Intermediate LLM generations (search, memory)
+// Raw LLM responses (replies, search, memory)
 model generations {
     sequenceNumber Int @id @default(autoincrement())
     data Json

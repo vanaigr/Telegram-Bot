@@ -541,30 +541,35 @@ export async function reply(
   log.I('Locked ', [chatId])
   // Lock aquired - no new replies will be inserted.
 
+  const answered = Db.makeTableAlias(Db.t.messages, 'answered')
   const firstLatest = await Db.query(pool,
     'select', [
       Db.t.messages.messageId,
       Db.t.messages.raw,
-      Db.named('hasResponse', Db.not(Db.isNull(Db.t.responses.sequenceNumber))),
+      // A message is answered if a generation was made with it in history,
+      // i.e. some message at or after it has a non-empty generation.
+      // Not just the message itself since the following is possible:
+      // 1. user sends message 1
+      // 2. bot starts generating response 1
+      // 3. user sends message 2
+      // 4. Bot locks waiting for response 1
+      // 5. User sends message 3
+      // 6. Bot locks waiting for response 1
+      // 7. Response 1 is generated and sent. Stored on message 1
+      // 8. Response 2 logic runs, the latest message it sees is its own response.
+      // 9. Response 2 is generated and sent. Stored on response 1
+      // 10. Response 3 logic runs, the latest user message doesn't have its own generation,
+      // since response 2 is stored on response 1. But response 2 did include messages
+      // 1-3 in history, so another response should not be generated.
+      Db.named('hasResponse', Db.scalar<Db.DbTypeInfo<boolean, boolean>>('exists', Db.par(
+        'select 1',
+        'from', Db.t.messages, 'as', answered,
+        'where', Db.eq(answered.chatId, Db.t.messages.chatId),
+        'and', answered.messageId, '>=', Db.t.messages.messageId,
+        'and', Db.func('jsonb_array_length', answered.generation), '> 0',
+      ))),
     ],
     'from', Db.t.messages,
-
-    'left join', Db.t.responses,
-    'on', Db.eq(Db.t.messages.chatId, Db.t.responses.respondsToChatId),
-    // Find a response that has seen this message. Not = since the following is possible:
-    // 1. user sends message 1
-    // 2. bot starts generating response 1
-    // 3. user sends message 2
-    // 4. Bot locks waiting for response 1
-    // 5. User sends message 3
-    // 6. Bot locks waiting for response 1
-    // 7. Response 1 is generated and sent. Points at message 1
-    // 8. Response 2 logic runs, the latest message it sees is its own response.
-    // 9. Response 2 is generated and sent. Points at its own response
-    // 10. Response 3 logic runs, the latest user message doesn't have a direct response,
-    // since response 2 points at response 1. But response 2 did include messages
-    // 1-3 in history, so another response should not be generated.
-    'and', Db.t.messages.messageId, '<=', Db.t.responses.respondsToMessageId,
 
     'where', Db.eq(Db.t.messages.chatId, Db.param(BigInt(chatId))),
     'and', Db.eq(Db.t.messages.type, Db.param('user' as const)),
@@ -815,6 +820,22 @@ export async function reply(
     replyChain = replyChain.then(() => sendReply(reply, photo))
   }
 
+  // Also marks the messages as answered (see `hasResponse` above).
+  // Saved after each step so that a crash mid-turn doesn't cause a duplicate reply.
+  const saveGeneration = async() => {
+    if(thisMessageGeneration.length === 0) return
+    await Db.queryRaw(pool,
+      'update', Db.t.messages, 'set', Db.list([
+        Db.setJson(Db.t.messages.generation, [
+          ...respondsToMessage.generation,
+          ...thisMessageGeneration,
+        ]),
+      ]),
+      'where', Db.eq(Db.t.messages.chatId, Db.param(BigInt(chatId))),
+      'and', Db.eq(Db.t.messages.messageId, Db.param(BigInt(respondsToMessage.msg.message_id))),
+    )
+  }
+
   let lastReply = ''
   for(let iteration = 0;; iteration++) {
     if(iteration > 10) {
@@ -859,17 +880,12 @@ export async function reply(
 
     log.I('Received generation: ', [response, 'details'])
 
-    await Db.insertMany(
-      pool,
-      Db.t.responses,
-      Db.omit(Db.d.responses, ['sequenceNumber']),
-      [{
-        respondsToChatId: chatId,
-        respondsToMessageId,
-        raw: JSON.stringify(response),
-      }],
-      {}
-    )
+    await insertGeneration(pool, {
+      type: 'reply',
+      chatId,
+      respondsToMessageId,
+      response,
+    })
     openrouterMessages.push(response.choices[0].message)
     thisMessageGeneration.push(response.choices[0].message)
 
@@ -1107,6 +1123,7 @@ export async function reply(
       openrouterMessages.push(tool)
       thisMessageGeneration.push(tool)
     }
+    await saveGeneration()
 
     // Sent after all tools in the batch finished, so that an image generated
     // in the same batch is attached to the text.
@@ -1159,16 +1176,7 @@ export async function reply(
   if(photoToSend !== undefined) enqueueReply('')
   promises.push(replyChain)
 
-  await Db.queryRaw(pool,
-    'update', Db.t.messages, 'set', Db.list([
-      Db.setJson(Db.t.messages.generation, [
-        ...respondsToMessage.generation,
-        ...thisMessageGeneration,
-      ]),
-    ]),
-    'where', Db.eq(Db.t.messages.chatId, Db.param(BigInt(chatId))),
-    'and', Db.eq(Db.t.messages.messageId, Db.param(BigInt(respondsToMessage.msg.message_id))),
-  )
+  await saveGeneration()
 
   cancelTypingStatus()
 
@@ -2725,8 +2733,7 @@ function startTypingTask(chatId: number, log: L.Log) {
   }
 }
 
-// Intermediate generations that are not replies. Not in `responses`
-// since those mark messages as answered.
+// Raw LLM responses (replies, search, memory), for debugging.
 export async function insertGeneration(pool: Db.DbConnOrPool, data: Record<string, unknown>) {
   await Db.insertMany(
     pool,
