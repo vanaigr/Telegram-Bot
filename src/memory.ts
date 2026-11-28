@@ -12,6 +12,8 @@ const maxChunkMessages = 200
 // Images are dropped if they don't fit, but at least this many messages are summarized.
 const minChunkMessages = 20
 const imageQuota = { count: 30, size: 10_000_000 }
+// Messages before the chunk shown to the model for context only (without images).
+const contextMessages = 10
 
 export async function getLatestMemory(conn: Db.DbConnOrPool, chatId: number) {
   const t = Db.t.chatUserMemory
@@ -111,7 +113,10 @@ async function generateMemory(
   chatId: number,
   latest: Awaited<ReturnType<typeof getLatestMemory>>,
 ) {
-  const messages = await fetchChunk(pool, log, chatId, latest?.lastMessageId)
+  const [messages, context] = await Promise.all([
+    fetchChunk(pool, log, chatId, latest?.lastMessageId),
+    latest !== undefined ? fetchContext(pool, chatId, latest.lastMessageId) : [],
+  ])
   if(messages.length === 0) {
     log.unreachable()
     return false
@@ -153,15 +158,21 @@ async function generateMemory(
   )
   log.I('Inserted pre-version up to ', [lastMessage.message_id])
 
-  const transcript: Logic.ChatContentItems[] = []
-  for(const message of messages) {
-    const output: Logic.OpenRouterMessage[] = []
-    await Logic.messageToModelInput(message, { showFullGeneration: false, generatingMemory: true }, output, log)
-    for(const it of output) {
-      if(typeof it.content === 'string') transcript.push({ type: 'text', text: it.content })
-      else if(Array.isArray(it.content)) transcript.push(...it.content as Logic.ChatContentItems[])
+  const toTranscript = async(list: Logic.RootMessageWithAttachments[]) => {
+    const transcript: Logic.ChatContentItems[] = []
+    for(const message of list) {
+      const output: Logic.OpenRouterMessage[] = []
+      await Logic.messageToModelInput(message, { showFullGeneration: false, generatingMemory: true }, output, log)
+      for(const it of output) {
+        if(typeof it.content === 'string') transcript.push({ type: 'text', text: it.content })
+        else if(Array.isArray(it.content)) transcript.push(...it.content as Logic.ChatContentItems[])
+      }
     }
+    return transcript
   }
+  const contextTranscript = await toTranscript(context)
+  const transcript = await toTranscript(messages)
+  log.I('Including ', [context.length], ' context messages')
 
   log.I('Generating descriptions')
   const descriptionsResponse = await openRouter.chat.send({
@@ -201,7 +212,15 @@ async function generateMemory(
         {
           role: 'user',
           content: [
-            { type: 'text', text: 'Chat members:\n' + JSON.stringify(usersList, undefined, 2) + '\n\nMessages:\n' },
+            { type: 'text', text: 'Chat members:\n' + JSON.stringify(usersList, undefined, 2) + '\n\n' },
+            ...(contextTranscript.length > 0
+              ? [
+                { type: 'text' as const, text: 'Previous messages (CONTEXT ONLY — already processed, do not record anything from them):\n' },
+                ...contextTranscript,
+                { type: 'text' as const, text: '\n--- end of context-only messages ---\n\n' },
+              ]
+              : []),
+            { type: 'text', text: 'New messages:\n' },
             ...transcript,
           ],
         },
@@ -357,6 +376,31 @@ async function generateSummary(
   log.I('Updated summary for ', [latest.lastMessageId])
 }
 
+// Last `contextMessages` messages up to and including `lastMessageId`, without images.
+async function fetchContext(
+  pool: Db.DbPool,
+  chatId: number,
+  lastMessageId: bigint,
+) {
+  const t = Db.t.messages
+  const rows = await Db.query(pool,
+    'select', [t.raw, Db.named('from', t.type)],
+    'from', t,
+    'where', Db.eq(t.chatId, Db.param(BigInt(chatId))),
+    'and', t.messageId, '<=', Db.param(lastMessageId),
+    'order by', t.messageId, 'desc',
+    'limit ' + contextMessages,
+  )
+
+  return rows.reverse().map(({ raw, from }): Logic.RootMessageWithAttachments => ({
+    ...Logic.dbMessageToMessageWithAttachments(raw, true),
+    type: 'root',
+    from,
+    generation: [],
+    reactions: [],
+  }))
+}
+
 // Messages after `afterMessageId` with photo and video thumbnails loaded.
 async function fetchChunk(
   pool: Db.DbPool,
@@ -453,7 +497,8 @@ You maintain long-term memory about the members of a Telegram group chat. These 
 
 You are given:
 1. The chat members with their current descriptions.
-2. The next batch of historic chat messages. Each message starts with a "--- message from ... ---" header with the sender's user id and message metadata, followed by the message content. Replies and forwards are prefixed with "> ".
+2. Optionally, a few previous messages marked as context only. They were already processed in an earlier batch. Use them only to understand the new messages (who is replying to what, what a pronoun refers to). Never record anything from them on their own.
+3. The next batch of historic chat messages. Each message starts with a "--- message from ... ---" header with the sender's user id and message metadata, followed by the message content. Replies and forwards are prefixed with "> ".
 
 ## The test for every line
 Before writing or keeping any line, ask: "Would this still matter, or change how someone talks to this person, 3 months from now?"
